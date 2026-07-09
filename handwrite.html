@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Handwrite — Capture &amp; Generate Handwriting</title>
+    <meta name="description" content="Capture your own handwriting and generate human-like written documents with natural imperfections, baseline drift, and organic messiness.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        /* ===================== DESIGN TOKENS ===================== */
+        :root {
+            --bg-deep: #07080f;
+            --bg-surface: rgba(15, 17, 30, 0.85);
+            --bg-surface-hover: rgba(25, 28, 50, 0.92);
+            --bg-elevated: rgba(30, 34, 60, 0.75);
+            --accent-primary: #7c3aed;
+            --accent-secondary: #6366f1;
+            --accent-glow: rgba(124, 58, 237, 0.25);
+            --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%);
+            --accent-gradient-btn: linear-gradient(135deg, #6366f1, #7c3aed);
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border-subtle: rgba(148, 163, 184, 0.08);
+            --border-medium: rgba(148, 163, 184, 0.15);
+            --green: #10b981;
+            --green-bg: rgba(16, 185, 129, 0.12);
+            --amber: #f59e0b;
+            --amber-bg: rgba(245, 158, 11, 0.12);
+            --red: #ef4444;
+            --red-bg: rgba(239, 68, 68, 0.12);
+            --cyan: #06b6d4;
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            --shadow-card: 0 4px 24px rgba(0,0,0,0.25), 0 0 1px rgba(0,0,0,0.1);
+            --shadow-glow: 0 0 30px var(--accent-glow);
+            --transition-fast: 0.15s ease;
+            --transition-smooth: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* ===================== RESET & BASE ===================== */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 600px 400px at 15% 20%, rgba(99, 102, 241, 0.06) 0%, transparent 70%),
+                radial-gradient(ellipse 500px 500px at 85% 80%, rgba(139, 92, 246, 0.05) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ===================== SCROLLBAR ===================== */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.15);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.25); }
+
+        /* ===================== APP LAYOUT ===================== */
+        #app {
+            position: relative;
+            z-index: 1;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* ===================== HEADER ===================== */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border-subtle);
+            margin-bottom: 28px;
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .logo svg { width: 32px; height: 32px; }
+        .logo h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.02em;
+        }
+        nav { display: flex; gap: 4px; background: var(--bg-surface); border-radius: var(--radius-md); padding: 4px; }
+        .tab-btn {
+            padding: 10px 24px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 0.875rem;
+            font-weight: 500;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all var(--transition-smooth);
+            position: relative;
+        }
+        .tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+        .tab-btn.active {
+            color: #fff;
+            background: var(--accent-gradient-btn);
+            box-shadow: 0 2px 12px var(--accent-glow);
+        }
+
+        /* ===================== PANELS ===================== */
+        .panel { display: none; animation: fadeIn 0.35s ease; }
+        .panel.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* ===================== CAPTURE PANEL ===================== */
+        .capture-layout {
+            display: grid;
+            grid-template-columns: 260px 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+
+        /* Sidebar */
+        .char-sidebar {
+            background: var(--bg-surface);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-subtle);
+            padding: 20px;
+            backdrop-filter: blur(20px);
+            position: sticky;
+            top: 20px;
+        }
+        .sidebar-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+        .char-input-group { margin-bottom: 20px; }
+        .char-input-group label {
+            display: block;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        .char-input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid var(--border-medium);
+            border-radius: var(--radius-sm);
+            background: rgba(0,0,0,0.2);
+            color: var(--text-primary);
+            font-family: 'Inter', monospace;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-align: center;
+            outline: none;
+            transition: border-color var(--transition-fast);
+        }
+        .char-input:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px var(--accent-glow); }
+        .char-input::placeholder { color: var(--text-muted); font-weight: 400; }
+
+        /* Palette */
+        .palette-section { margin-bottom: 14px; }
+        .palette-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .palette-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+            gap: 3px;
+        }
+        .palette-btn {
+            aspect-ratio: 1;
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            background: rgba(0,0,0,0.15);
+            color: var(--text-muted);
+            font-family: 'Inter', monospace;
+            font-size: 0.7rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .palette-btn:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); border-color: var(--border-medium); }
+        .palette-btn.selected { border-color: var(--accent-primary); background: var(--accent-glow); color: #fff; }
+        .palette-btn.partial { border-color: var(--amber); color: var(--amber); }
+        .palette-btn.complete { border-color: var(--green); color: var(--green); }
+        .palette-btn .badge {
+            position: absolute;
+            top: -3px;
+            right: -3px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            font-size: 0;
+        }
+        .palette-btn.partial .badge { background: var(--amber); }
+        .palette-btn.complete .badge { background: var(--green); }
+
+        /* Profile Actions */
+        .profile-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        /* Canvas Area */
+        .canvas-area {
+            background: var(--bg-surface);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-subtle);
+            padding: 24px;
+            backdrop-filter: blur(20px);
+        }
+        .canvas-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .current-char-display {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        .current-char-display span {
+            font-size: 1.6rem;
+            color: var(--text-primary);
+            margin-left: 8px;
+            font-weight: 700;
+        }
+        .variation-slots { display: flex; gap: 6px; }
+        .var-slot {
+            width: 40px;
+            height: 36px;
+            border: 2px solid var(--border-medium);
+            border-radius: var(--radius-sm);
+            background: transparent;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+        .var-slot:hover { border-color: var(--text-secondary); color: var(--text-secondary); }
+        .var-slot.active { border-color: var(--accent-primary); color: #fff; background: var(--accent-glow); }
+        .var-slot.filled { border-color: var(--green); color: var(--green); }
+        .var-slot.active.filled { border-color: var(--accent-primary); color: #fff; background: var(--accent-glow); }
+
+        .canvas-wrapper {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+        #capture-canvas {
+            background: #fafbfc;
+            border-radius: var(--radius-md);
+            cursor: crosshair;
+            touch-action: none;
+            box-shadow: inset 0 2px 8px rgba(0,0,0,0.06);
+            max-width: 100%;
+            height: auto;
+        }
+        .canvas-controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+
+        /* Variation Previews */
+        .variation-previews {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-subtle);
+        }
+        .var-preview-box {
+            text-align: center;
+        }
+        .var-preview-label {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+        .var-preview {
+            background: #fafbfc;
+            border-radius: 6px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        /* ===================== GENERATE PANEL ===================== */
+        .generate-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+        .input-side {
+            background: var(--bg-surface);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-subtle);
+            padding: 24px;
+            backdrop-filter: blur(20px);
+        }
+        .input-side-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 14px;
+            color: var(--text-primary);
+        }
+        #text-input {
+            width: 100%;
+            min-height: 200px;
+            padding: 16px;
+            border: 1px solid var(--border-medium);
+            border-radius: var(--radius-md);
+            background: rgba(0,0,0,0.25);
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            resize: vertical;
+            outline: none;
+            transition: border-color var(--transition-fast);
+        }
+        #text-input:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px var(--accent-glow); }
+        #text-input::placeholder { color: var(--text-muted); }
+
+        /* Settings */
+        .render-settings {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .settings-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+        }
+        .setting-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .setting-row label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            min-width: 130px;
+            font-weight: 500;
+        }
+        .setting-row input[type="range"] {
+            flex: 1;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: rgba(255,255,255,0.08);
+            border-radius: 2px;
+            outline: none;
+        }
+        .setting-row input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--accent-gradient-btn);
+            cursor: pointer;
+            border: 2px solid rgba(255,255,255,0.2);
+            box-shadow: 0 2px 6px var(--accent-glow);
+        }
+        .setting-val {
+            font-size: 0.8rem;
+            color: var(--cyan);
+            font-weight: 600;
+            min-width: 42px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .render-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        /* Output Side */
+        .output-side {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .output-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .output-header-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .output-area {
+            background: var(--bg-surface);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-subtle);
+            padding: 24px;
+            backdrop-filter: blur(20px);
+            min-height: 500px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            overflow-y: auto;
+            max-height: 80vh;
+        }
+        .output-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 400px;
+            color: var(--text-muted);
+            text-align: center;
+            gap: 12px;
+        }
+        .output-placeholder svg { opacity: 0.3; }
+        .output-placeholder p { font-size: 0.9rem; }
+        .output-page {
+            box-shadow: 0 4px 24px rgba(0,0,0,0.35), 0 0 1px rgba(0,0,0,0.15);
+            border-radius: 3px;
+            max-width: 100%;
+            height: auto;
+        }
+        .page-number {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        /* ===================== BUTTONS ===================== */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-family: inherit;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-smooth);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-primary {
+            background: var(--accent-gradient-btn);
+            color: #fff;
+            box-shadow: 0 2px 12px var(--accent-glow);
+        }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 20px var(--accent-glow); filter: brightness(1.1); }
+        .btn-primary:active { transform: translateY(0); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; filter: none; }
+        .btn-secondary {
+            background: rgba(255,255,255,0.06);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-medium);
+        }
+        .btn-secondary:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+            padding: 8px 14px;
+        }
+        .btn-ghost:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+        .btn-success {
+            background: linear-gradient(135deg, #059669, #10b981);
+            color: #fff;
+            box-shadow: 0 2px 12px rgba(16, 185, 129, 0.25);
+        }
+        .btn-success:hover { transform: translateY(-1px); filter: brightness(1.1); }
+        .btn-success:disabled { opacity: 0.5; cursor: not-allowed; transform: none; filter: none; }
+        .btn-danger {
+            background: rgba(239,68,68,0.15);
+            color: var(--red);
+        }
+        .btn-danger:hover { background: rgba(239,68,68,0.25); }
+        .btn-full { width: 100%; justify-content: center; }
+        .btn-lg { padding: 14px 28px; font-size: 0.95rem; border-radius: var(--radius-md); }
+
+        /* ===================== TOAST ===================== */
+        #toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            pointer-events: none;
+        }
+        .toast {
+            padding: 12px 22px;
+            border-radius: var(--radius-sm);
+            color: #fff;
+            font-size: 0.85rem;
+            font-weight: 500;
+            opacity: 0;
+            transform: translateX(40px);
+            transition: all var(--transition-smooth);
+            backdrop-filter: blur(12px);
+            pointer-events: auto;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .toast.show { opacity: 1; transform: translateX(0); }
+        .toast-info { background: rgba(99, 102, 241, 0.92); }
+        .toast-success { background: rgba(16, 185, 129, 0.92); }
+        .toast-warning { background: rgba(245, 158, 11, 0.92); }
+        .toast-error { background: rgba(239, 68, 68, 0.92); }
+
+        /* ===================== MISSING CHARS BANNER ===================== */
+        .missing-chars-banner {
+            background: var(--amber-bg);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
+            margin-top: 12px;
+            font-size: 0.78rem;
+            color: var(--amber);
+            line-height: 1.5;
+        }
+        .missing-chars-banner strong { font-weight: 700; }
+
+        /* ===================== RESPONSIVE ===================== */
+        @media (max-width: 1000px) {
+            .capture-layout { grid-template-columns: 1fr; }
+            .generate-layout { grid-template-columns: 1fr; }
+            .char-sidebar { position: static; }
+        }
+        @media (max-width: 600px) {
+            #app { padding: 0 12px; }
+            header { flex-direction: column; gap: 12px; }
+            .canvas-controls { flex-wrap: wrap; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <!-- ==================== HEADER ==================== -->
+    <header>
+        <div class="logo">
+            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect width="32" height="32" rx="8" fill="url(#logo_grad)"/>
+                <path d="M10 24L14 8H16L12 24H10Z" fill="white" opacity="0.9"/>
+                <path d="M15 24L19 8H21L17 24H15Z" fill="white" opacity="0.7"/>
+                <path d="M20 24L24 8H22L18 24H20Z" fill="white" opacity="0.5"/>
+                <defs><linearGradient id="logo_grad" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+            </svg>
+            <h1>Handwrite</h1>
+        </div>
+        <nav>
+            <button class="tab-btn active" data-tab="capture" id="tab-capture">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-2px"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+                Capture
+            </button>
+            <button class="tab-btn" data-tab="generate" id="tab-generate">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-2px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                Generate
+            </button>
+        </nav>
+    </header>
+
+    <!-- ==================== CAPTURE PANEL ==================== -->
+    <section id="capture-panel" class="panel active">
+        <div class="capture-layout">
+            <!-- Sidebar -->
+            <aside class="char-sidebar">
+                <div class="char-input-group">
+                    <label for="char-input">Type a Character</label>
+                    <input type="text" id="char-input" class="char-input" maxlength="1" placeholder="A" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="sidebar-title">Character Palette</div>
+                <div id="palette-container"></div>
+                <div class="profile-actions">
+                    <button class="btn btn-success btn-full" id="save-profile-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Save Profile
+                    </button>
+                    <button class="btn btn-secondary btn-full" id="load-profile-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Load Profile
+                    </button>
+                    <input type="file" id="profile-file-input" accept=".json" hidden>
+                </div>
+            </aside>
+
+            <!-- Canvas Area -->
+            <div class="canvas-area">
+                <div class="canvas-header">
+                    <div class="current-char-display" id="current-char-display">Select a character to begin</div>
+                    <div class="variation-slots" id="variation-slots">
+                        <button class="var-slot active" data-var="0">1</button>
+                        <button class="var-slot" data-var="1">2</button>
+                        <button class="var-slot" data-var="2">3</button>
+                    </div>
+                </div>
+                <div class="canvas-wrapper">
+                    <canvas id="capture-canvas" width="400" height="480"></canvas>
+                </div>
+                <div class="canvas-controls">
+                    <button class="btn btn-ghost" id="undo-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                        Undo
+                    </button>
+                    <button class="btn btn-danger" id="clear-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        Clear
+                    </button>
+                    <button class="btn btn-primary" id="save-var-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        Save Variation
+                    </button>
+                </div>
+                <div class="variation-previews" id="variation-previews">
+                    <div class="var-preview-box">
+                        <div class="var-preview-label">Var 1</div>
+                        <canvas class="var-preview" id="var-preview-0" width="90" height="108"></canvas>
+                    </div>
+                    <div class="var-preview-box">
+                        <div class="var-preview-label">Var 2</div>
+                        <canvas class="var-preview" id="var-preview-1" width="90" height="108"></canvas>
+                    </div>
+                    <div class="var-preview-box">
+                        <div class="var-preview-label">Var 3</div>
+                        <canvas class="var-preview" id="var-preview-2" width="90" height="108"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ==================== GENERATE PANEL ==================== -->
+    <section id="generate-panel" class="panel">
+        <div class="generate-layout">
+            <!-- Input Side -->
+            <div class="input-side">
+                <div class="input-side-title">Document Text</div>
+                <textarea id="text-input" placeholder="Type or paste your text here... The rendering engine will transform it into your handwriting with natural imperfections."></textarea>
+                <div id="missing-chars-area"></div>
+                <div class="render-settings">
+                    <div class="settings-title">Rendering Parameters</div>
+                    <div class="setting-row">
+                        <label>Character Size</label>
+                        <input type="range" id="set-char-size" min="14" max="40" value="24">
+                        <span class="setting-val" id="val-char-size">24px</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Line Spacing</label>
+                        <input type="range" id="set-line-spacing" min="12" max="30" value="18">
+                        <span class="setting-val" id="val-line-spacing">18px</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Micro-Shake</label>
+                        <input type="range" id="set-shake" min="0" max="25" value="8">
+                        <span class="setting-val" id="val-shake">0.8px</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Baseline Drift</label>
+                        <input type="range" id="set-drift" min="0" max="40" value="12">
+                        <span class="setting-val" id="val-drift">1.2</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Stroke Imperfection</label>
+                        <input type="range" id="set-imperf" min="0" max="30" value="6">
+                        <span class="setting-val" id="val-imperf">6%</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Ink Color</label>
+                        <input type="color" id="set-ink-color" value="#111827" style="width:36px;height:28px;border:none;background:none;cursor:pointer;">
+                        <span class="setting-val" id="val-ink-color">#111827</span>
+                    </div>
+                </div>
+                <div class="render-actions">
+                    <button class="btn btn-primary btn-lg btn-full" id="render-btn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        Render Handwritten Document
+                    </button>
+                </div>
+            </div>
+
+            <!-- Output Side -->
+            <div class="output-side">
+                <div class="output-header">
+                    <div class="output-header-title">Preview</div>
+                    <button class="btn btn-success" id="export-pdf-btn" disabled>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+                        Export PDF
+                    </button>
+                </div>
+                <div class="output-area" id="output-area">
+                    <div class="output-placeholder" id="output-placeholder">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        <p>Your handwritten document will appear here.<br>Type some text, then click <strong>Render</strong>.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<script>
+/* ================================================================
+   HANDWRITE — Handwriting Capture & Generation Engine
+   Single-file application  •  Vanilla JS  •  HTML5 Canvas
+   ================================================================ */
+
+(() => {
+'use strict';
+
+// ==================== CONSTANTS ====================
+const CAPTURE_W = 400;
+const CAPTURE_H = 480;
+const PAGE_W = 816;   // US Letter @ 96 DPI
+const PAGE_H = 1056;
+const MAX_VARIATIONS = 3;
+
+const CHAR_SETS = [
+    { label: 'Uppercase', chars: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
+    { label: 'Lowercase', chars: 'abcdefghijklmnopqrstuvwxyz' },
+    { label: 'Digits',    chars: '0123456789' },
+    { label: 'Punctuation', chars: '.,!?;:\'-"()/@#&+=*' },
+];
+
+// ==================== STATE ====================
+const STATE = {
+    currentChar: null,
+    currentVariation: 0,
+    isDrawing: false,
+    currentStroke: [],      // [[x,y], ...]  raw canvas coords
+    strokes: [],            // [stroke, stroke, ...]  current canvas session
+    profile: {},            // { char: [ {strokes: [normalized]}, ...] }
+    renderedPages: [],      // [canvas, canvas, ...]
+};
+
+// ==================== DOM REFS ====================
+const $ = id => document.getElementById(id);
+const captureCanvas = $('capture-canvas');
+const captureCtx = captureCanvas.getContext('2d');
+const charInput = $('char-input');
+const charDisplay = $('current-char-display');
+const variationSlots = $('variation-slots');
+const paletteContainer = $('palette-container');
+const toastContainer = $('toast-container');
+const textInput = $('text-input');
+const outputArea = $('output-area');
+const previewCanvases = [0,1,2].map(i => $(`var-preview-${i}`));
+const previewCtxs = previewCanvases.map(c => c.getContext('2d'));
+
+// ==================== TOAST SYSTEM ====================
+function showToast(message, type = 'info', duration = 3000) {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+    requestAnimationFrame(() => { requestAnimationFrame(() => toast.classList.add('show')); });
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 350);
+    }, duration);
+}
+
+// ==================== CANVAS DRAWING UTILITIES ====================
+function getPointerPos(canvas, e) {
+    const rect = canvas.getBoundingClientRect();
+    return [
+        (e.clientX - rect.left) * (canvas.width / rect.width),
+        (e.clientY - rect.top) * (canvas.height / rect.height)
+    ];
+}
+
+function drawSmoothLine(ctx, points, color = '#111', width = 2.5) {
+    if (!points || points.length < 1) return;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (points.length === 1) {
+        ctx.beginPath();
+        ctx.arc(points[0][0], points[0][1], width / 2, 0, Math.PI * 2);
+        ctx.fill();
+        return;
+    }
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    if (points.length === 2) {
+        ctx.lineTo(points[1][0], points[1][1]);
+    } else {
+        for (let i = 1; i < points.length - 1; i++) {
+            const mx = (points[i][0] + points[i + 1][0]) / 2;
+            const my = (points[i][1] + points[i + 1][1]) / 2;
+            ctx.quadraticCurveTo(points[i][0], points[i][1], mx, my);
+        }
+        const last = points[points.length - 1];
+        ctx.lineTo(last[0], last[1]);
+    }
+    ctx.stroke();
+}
+
+function thinPoints(points, minDist = 3) {
+    if (points.length < 3) return points;
+    const result = [points[0]];
+    for (let i = 1; i < points.length; i++) {
+        const dx = points[i][0] - result[result.length - 1][0];
+        const dy = points[i][1] - result[result.length - 1][1];
+        if (dx * dx + dy * dy >= minDist * minDist) result.push(points[i]);
+    }
+    const last = points[points.length - 1];
+    if (result[result.length - 1] !== last) result.push(last);
+    return result;
+}
+
+// ==================== CAPTURE CANVAS ====================
+function redrawCaptureCanvas() {
+    const ctx = captureCtx;
+    ctx.clearRect(0, 0, CAPTURE_W, CAPTURE_H);
+
+    // Background
+    ctx.fillStyle = '#fafbfc';
+    ctx.fillRect(0, 0, CAPTURE_W, CAPTURE_H);
+
+    // Guide lines
+    ctx.strokeStyle = 'rgba(99, 102, 241, 0.1)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 6]);
+
+    // Cap height guide ~ 18%
+    const capY = CAPTURE_H * 0.18;
+    ctx.beginPath(); ctx.moveTo(20, capY); ctx.lineTo(CAPTURE_W - 20, capY); ctx.stroke();
+
+    // Midline ~ 45%
+    const midY = CAPTURE_H * 0.45;
+    ctx.beginPath(); ctx.moveTo(20, midY); ctx.lineTo(CAPTURE_W - 20, midY); ctx.stroke();
+
+    // Baseline ~ 75%
+    ctx.strokeStyle = 'rgba(99, 102, 241, 0.18)';
+    const baseY = CAPTURE_H * 0.75;
+    ctx.beginPath(); ctx.moveTo(20, baseY); ctx.lineTo(CAPTURE_W - 20, baseY); ctx.stroke();
+
+    // Descender ~ 92%
+    ctx.strokeStyle = 'rgba(99, 102, 241, 0.08)';
+    const descY = CAPTURE_H * 0.92;
+    ctx.beginPath(); ctx.moveTo(20, descY); ctx.lineTo(CAPTURE_W - 20, descY); ctx.stroke();
+
+    ctx.setLineDash([]);
+
+    // Draw all committed strokes
+    for (const stroke of STATE.strokes) {
+        drawSmoothLine(ctx, stroke, '#111', 2.5);
+    }
+
+    // Draw current live stroke
+    if (STATE.currentStroke.length > 0) {
+        drawSmoothLine(ctx, STATE.currentStroke, '#111', 2.5);
+    }
+}
+
+// Pointer events for drawing
+function onPointerDown(e) {
+    if (!STATE.currentChar) { showToast('Select a character first', 'warning'); return; }
+    e.preventDefault();
+    STATE.isDrawing = true;
+    const pos = getPointerPos(captureCanvas, e);
+    STATE.currentStroke = [pos];
+    captureCanvas.setPointerCapture(e.pointerId);
+}
+
+function onPointerMove(e) {
+    if (!STATE.isDrawing) return;
+    e.preventDefault();
+    const pos = getPointerPos(captureCanvas, e);
+    STATE.currentStroke.push(pos);
+    redrawCaptureCanvas();
+}
+
+function onPointerUp(e) {
+    if (!STATE.isDrawing) return;
+    e.preventDefault();
+    STATE.isDrawing = false;
+    if (STATE.currentStroke.length > 0) {
+        STATE.strokes.push(thinPoints(STATE.currentStroke, 2.5));
+        STATE.currentStroke = [];
+    }
+    redrawCaptureCanvas();
+}
+
+captureCanvas.addEventListener('pointerdown', onPointerDown);
+captureCanvas.addEventListener('pointermove', onPointerMove);
+captureCanvas.addEventListener('pointerup', onPointerUp);
+captureCanvas.addEventListener('pointerleave', onPointerUp);
+
+// ==================== VARIATION MANAGEMENT ====================
+function selectCharacter(char) {
+    STATE.currentChar = char;
+    charInput.value = char;
+
+    // Auto-select first unfilled variation
+    let targetVar = 0;
+    if (STATE.profile[char]) {
+        for (let i = 0; i < MAX_VARIATIONS; i++) {
+            if (!STATE.profile[char][i]) { targetVar = i; break; }
+            if (i === MAX_VARIATIONS - 1) targetVar = 0; // all filled, default to 0
+        }
+    }
+    selectVariation(targetVar);
+    updatePaletteSelection();
+}
+
+function selectVariation(idx) {
+    STATE.currentVariation = idx;
+    STATE.currentStroke = [];
+
+    // Load existing data if available
+    const char = STATE.currentChar;
+    if (char && STATE.profile[char] && STATE.profile[char][idx]) {
+        const variation = STATE.profile[char][idx];
+        STATE.strokes = variation.strokes.map(s =>
+            s.map(([nx, ny]) => [nx * CAPTURE_W, ny * CAPTURE_H])
+        );
+    } else {
+        STATE.strokes = [];
+    }
+
+    redrawCaptureCanvas();
+    updateVariationSlots();
+    updateVariationPreviews();
+    updateCharDisplay();
+}
+
+function saveVariation() {
+    if (STATE.strokes.length === 0 && STATE.currentStroke.length === 0) {
+        showToast('Draw something first!', 'warning');
+        return;
+    }
+    const char = STATE.currentChar;
+    if (!char) { showToast('Select a character first!', 'warning'); return; }
+
+    // Finalize any live stroke
+    if (STATE.currentStroke.length > 0) {
+        STATE.strokes.push(thinPoints(STATE.currentStroke, 2.5));
+        STATE.currentStroke = [];
+    }
+
+    // Normalize strokes to 0-1
+    const normalizedStrokes = STATE.strokes.map(stroke =>
+        stroke.map(([x, y]) => [
+            Math.round((x / CAPTURE_W) * 10000) / 10000,
+            Math.round((y / CAPTURE_H) * 10000) / 10000
+        ])
+    );
+
+    if (!STATE.profile[char]) STATE.profile[char] = [];
+    STATE.profile[char][STATE.currentVariation] = { strokes: normalizedStrokes };
+
+    showToast(`Variation ${STATE.currentVariation + 1} saved for "${char}"`, 'success');
+
+    updateVariationSlots();
+    updateVariationPreviews();
+    updatePaletteStatus();
+
+    // Auto-advance to next unfilled variation
+    for (let offset = 1; offset <= MAX_VARIATIONS; offset++) {
+        const next = (STATE.currentVariation + offset) % MAX_VARIATIONS;
+        if (!STATE.profile[char] || !STATE.profile[char][next]) {
+            selectVariation(next);
+            return;
+        }
+    }
+    // All filled — show a success state
+    showToast(`All 3 variations for "${char}" complete!`, 'success');
+}
+
+function undoStroke() {
+    if (STATE.currentStroke.length > 0) {
+        STATE.currentStroke = [];
+    } else if (STATE.strokes.length > 0) {
+        STATE.strokes.pop();
+    }
+    redrawCaptureCanvas();
+}
+
+function clearCanvas() {
+    STATE.strokes = [];
+    STATE.currentStroke = [];
+    redrawCaptureCanvas();
+}
+
+// ==================== UI UPDATES ====================
+function updateCharDisplay() {
+    if (STATE.currentChar) {
+        charDisplay.innerHTML = `Drawing: <span>${escapeHTML(STATE.currentChar)}</span>`;
+    } else {
+        charDisplay.textContent = 'Select a character to begin';
+    }
+}
+
+function updateVariationSlots() {
+    const slots = variationSlots.querySelectorAll('.var-slot');
+    slots.forEach((slot, i) => {
+        slot.classList.toggle('active', i === STATE.currentVariation);
+        const hasFill = STATE.currentChar && STATE.profile[STATE.currentChar] && STATE.profile[STATE.currentChar][i];
+        slot.classList.toggle('filled', !!hasFill);
+    });
+}
+
+function updateVariationPreviews() {
+    for (let i = 0; i < MAX_VARIATIONS; i++) {
+        const ctx = previewCtxs[i];
+        const c = previewCanvases[i];
+        ctx.clearRect(0, 0, c.width, c.height);
+        ctx.fillStyle = '#fafbfc';
+        ctx.fillRect(0, 0, c.width, c.height);
+
+        const char = STATE.currentChar;
+        if (char && STATE.profile[char] && STATE.profile[char][i]) {
+            const variation = STATE.profile[char][i];
+            const scaleX = c.width / CAPTURE_W;
+            const scaleY = c.height / CAPTURE_H;
+            for (const stroke of variation.strokes) {
+                const scaled = stroke.map(([nx, ny]) => [nx * CAPTURE_W * scaleX, ny * CAPTURE_H * scaleY]);
+                drawSmoothLine(ctx, scaled, '#111', 1.5);
+            }
+        }
+    }
+}
+
+function escapeHTML(str) {
+    const el = document.createElement('span');
+    el.textContent = str;
+    return el.innerHTML;
+}
+
+// ==================== CHARACTER PALETTE ====================
+function buildPalette() {
+    paletteContainer.innerHTML = '';
+    for (const set of CHAR_SETS) {
+        const section = document.createElement('div');
+        section.className = 'palette-section';
+        const label = document.createElement('div');
+        label.className = 'palette-label';
+        label.textContent = set.label;
+        section.appendChild(label);
+
+        const grid = document.createElement('div');
+        grid.className = 'palette-grid';
+        for (const ch of set.chars) {
+            const btn = document.createElement('button');
+            btn.className = 'palette-btn';
+            btn.textContent = ch;
+            btn.dataset.char = ch;
+            btn.title = ch;
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            btn.appendChild(badge);
+            btn.addEventListener('click', () => selectCharacter(ch));
+            grid.appendChild(btn);
+        }
+        section.appendChild(grid);
+        paletteContainer.appendChild(section);
+    }
+}
+
+function updatePaletteStatus() {
+    const buttons = paletteContainer.querySelectorAll('.palette-btn');
+    buttons.forEach(btn => {
+        const ch = btn.dataset.char;
+        const data = STATE.profile[ch];
+        const count = data ? data.filter(Boolean).length : 0;
+        btn.classList.toggle('partial', count > 0 && count < MAX_VARIATIONS);
+        btn.classList.toggle('complete', count === MAX_VARIATIONS);
+    });
+}
+
+function updatePaletteSelection() {
+    const buttons = paletteContainer.querySelectorAll('.palette-btn');
+    buttons.forEach(btn => {
+        btn.classList.toggle('selected', btn.dataset.char === STATE.currentChar);
+    });
+}
+
+// ==================== PROFILE SAVE / LOAD ====================
+function saveProfile() {
+    const charCount = Object.keys(STATE.profile).length;
+    if (charCount === 0) { showToast('No handwriting data to save!', 'warning'); return; }
+    const data = JSON.stringify(STATE.profile, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'handwriting-profile.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Profile saved (${charCount} characters)`, 'success');
+}
+
+function loadProfile(jsonStr) {
+    try {
+        const data = JSON.parse(jsonStr);
+        if (typeof data !== 'object' || data === null) throw new Error('Invalid format');
+        STATE.profile = data;
+        updatePaletteStatus();
+        const charCount = Object.keys(data).length;
+        const totalVars = Object.values(data).reduce((sum, arr) => sum + (arr ? arr.filter(Boolean).length : 0), 0);
+        showToast(`Profile loaded: ${charCount} chars, ${totalVars} variations`, 'success');
+        if (STATE.currentChar) {
+            selectVariation(STATE.currentVariation);
+        }
+    } catch (err) {
+        showToast('Failed to parse profile file!', 'error');
+        console.error(err);
+    }
+}
+
+// ==================== SETTINGS HELPERS ====================
+function getSettings() {
+    return {
+        charSize: parseInt($('set-char-size').value),
+        lineSpacing: parseInt($('set-line-spacing').value),
+        shake: parseInt($('set-shake').value) / 10,          // 0 – 2.5 px
+        driftAmplitude: parseInt($('set-drift').value) / 10,  // 0 – 4.0 px
+        driftWavelength: 18 + Math.random() * 8,              // chars per cycle
+        driftWalkStep: 0.3,
+        driftMaxWalk: 4,
+        imperfection: parseInt($('set-imperf').value) / 100,  // 0 – 0.30
+        inkColor: $('set-ink-color').value,
+    };
+}
+
+function updateSettingsDisplay() {
+    $('val-char-size').textContent = $('set-char-size').value + 'px';
+    $('val-line-spacing').textContent = $('set-line-spacing').value + 'px';
+    $('val-shake').textContent = (parseInt($('set-shake').value) / 10).toFixed(1) + 'px';
+    $('val-drift').textContent = (parseInt($('set-drift').value) / 10).toFixed(1);
+    $('val-imperf').textContent = $('set-imperf').value + '%';
+    $('val-ink-color').textContent = $('set-ink-color').value;
+}
+
+// ==================== MISSING CHARACTERS CHECK ====================
+function checkMissingChars(text) {
+    const needed = new Set();
+    for (const ch of text) {
+        if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t') continue;
+        if (!STATE.profile[ch] || STATE.profile[ch].filter(Boolean).length === 0) {
+            needed.add(ch);
+        }
+    }
+    const area = $('missing-chars-area');
+    if (needed.size > 0) {
+        const chars = [...needed].map(c => `"${c}"`).join(', ');
+        area.innerHTML = `<div class="missing-chars-banner"><strong>Missing characters:</strong> ${escapeHTML(chars)}<br>These will be skipped during rendering. Switch to <strong>Capture</strong> to draw them.</div>`;
+    } else {
+        area.innerHTML = '';
+    }
+}
+
+// ==================== RENDERING ENGINE ====================
+function createPageCanvas() {
+    const c = document.createElement('canvas');
+    c.width = PAGE_W;
+    c.height = PAGE_H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+    return c;
+}
+
+function renderDocument(text, settings) {
+    if (!text || text.trim().length === 0) {
+        showToast('Enter some text first!', 'warning');
+        return [];
+    }
+
+    const charH = settings.charSize;
+    const charW = charH * 0.65;
+    const charSpacing = charH * 0.08;
+    const lineH = charH + settings.lineSpacing;
+    const spaceW = charW * 0.55;
+    const strokeWidth = Math.max(0.7, charH * 0.052);
+    const inkColor = settings.inkColor;
+
+    const marginL = 72, marginR = 72, marginT = 80, marginB = 72;
+    const maxX = PAGE_W - marginR;
+    const maxY = PAGE_H - marginB;
+
+    const pages = [];
+    let page = createPageCanvas();
+    let ctx = page.getContext('2d');
+    pages.push(page);
+
+    let x = marginL;
+    let y = marginT + charH;
+    let lineCharIdx = 0;
+    let randomWalk = 0;
+
+    // Split text into paragraphs, then words
+    const paragraphs = text.split('\n');
+
+    for (let pi = 0; pi < paragraphs.length; pi++) {
+        const para = paragraphs[pi];
+
+        if (para.trim() === '') {
+            // Empty line → advance
+            x = marginL;
+            y += lineH;
+            lineCharIdx = 0;
+            randomWalk = 0;
+            if (y > maxY) {
+                page = createPageCanvas();
+                ctx = page.getContext('2d');
+                pages.push(page);
+                y = marginT + charH;
+            }
+            continue;
+        }
+
+        const words = para.split(/(\s+)/);
+
+        for (const segment of words) {
+            if (/^\s+$/.test(segment)) {
+                // Whitespace
+                for (const ch of segment) {
+                    if (ch === '\t') {
+                        x += spaceW * 4;
+                    } else {
+                        x += spaceW + (Math.random() - 0.5) * 2;
+                    }
+                    lineCharIdx++;
+                }
+                continue;
+            }
+
+            // Word: check if it fits on current line
+            const wordW = segment.length * (charW + charSpacing);
+            if (x > marginL + 5 && x + wordW > maxX) {
+                x = marginL + (Math.random() - 0.5) * 3;
+                y += lineH + (Math.random() - 0.5) * 2;
+                lineCharIdx = 0;
+                randomWalk = 0;
+                if (y > maxY) {
+                    page = createPageCanvas();
+                    ctx = page.getContext('2d');
+                    pages.push(page);
+                    y = marginT + charH;
+                }
+            }
+
+            // Render each character of the word
+            for (const ch of segment) {
+                const charData = STATE.profile[ch];
+                if (!charData || charData.filter(Boolean).length === 0) {
+                    // Skip unknown characters (advance position slightly)
+                    x += charW * 0.5;
+                    lineCharIdx++;
+                    continue;
+                }
+
+                // Pick random variation
+                const validVars = charData.filter(Boolean);
+                const variation = validVars[Math.floor(Math.random() * validVars.length)];
+
+                // Baseline drift
+                const sine = settings.driftAmplitude * Math.sin(2 * Math.PI * lineCharIdx / settings.driftWavelength);
+                randomWalk += (Math.random() - 0.5) * settings.driftWalkStep * 2;
+                randomWalk = Math.max(-settings.driftMaxWalk, Math.min(settings.driftMaxWalk, randomWalk));
+                const drift = sine + randomWalk;
+
+                // Slight per-character rotation (very subtle)
+                const microRotation = (Math.random() - 0.5) * 0.03;
+
+                // Size variation
+                const sizeJitter = 1 + (Math.random() - 0.5) * 0.06;
+
+                // Render strokes
+                for (let si = 0; si < variation.strokes.length; si++) {
+                    const stroke = variation.strokes[si];
+
+                    // Stroke imperfection: truncation
+                    let endIdx = stroke.length;
+                    if (Math.random() < settings.imperfection) {
+                        endIdx = Math.floor(stroke.length * (0.78 + Math.random() * 0.15));
+                    }
+
+                    // Stroke imperfection: misalignment (for secondary strokes)
+                    let misX = 0, misY = 0;
+                    if (si > 0 && Math.random() < settings.imperfection) {
+                        misX = (Math.random() - 0.5) * charH * 0.08;
+                        misY = (Math.random() - 0.5) * charH * 0.06;
+                    }
+
+                    // Build transformed points
+                    const points = [];
+                    for (let pi2 = 0; pi2 < endIdx; pi2++) {
+                        const [nx, ny] = stroke[pi2];
+                        // Base position
+                        let px = x + nx * charW * sizeJitter + misX;
+                        let py = (y - charH) + drift + ny * charH * sizeJitter + misY;
+
+                        // Micro-rotation around character center
+                        if (microRotation !== 0) {
+                            const cx = x + charW * 0.5;
+                            const cy = y - charH * 0.5 + drift;
+                            const dx = px - cx, dy = py - cy;
+                            const cos = Math.cos(microRotation), sin2 = Math.sin(microRotation);
+                            px = cx + dx * cos - dy * sin2;
+                            py = cy + dx * sin2 + dy * cos;
+                        }
+
+                        // Micro-shake (hand tremor)
+                        px += (Math.random() - 0.5) * 2 * settings.shake;
+                        py += (Math.random() - 0.5) * 2 * settings.shake;
+
+                        points.push([px, py]);
+                    }
+
+                    // Draw with bezier smoothing
+                    if (points.length > 0) {
+                        // Vary stroke width slightly for pressure simulation
+                        const sw = strokeWidth * (0.9 + Math.random() * 0.2);
+                        drawSmoothLine(ctx, points, inkColor, sw);
+                    }
+                }
+
+                // Advance position
+                const actualW = getCharRenderedWidth(variation, charW * sizeJitter);
+                x += actualW + charSpacing + (Math.random() - 0.5) * 2;
+                lineCharIdx++;
+            }
+        }
+
+        // Paragraph break
+        x = marginL + (Math.random() - 0.5) * 3;
+        y += lineH + (Math.random() - 0.5) * 2;
+        lineCharIdx = 0;
+        randomWalk = 0;
+        if (y > maxY) {
+            page = createPageCanvas();
+            ctx = page.getContext('2d');
+            pages.push(page);
+            y = marginT + charH;
+        }
+    }
+
+    return pages;
+}
+
+function getCharRenderedWidth(variation, baseW) {
+    // Compute actual rightmost extent of strokes to determine character advance
+    let maxX = 0;
+    for (const stroke of variation.strokes) {
+        for (const [nx] of stroke) {
+            if (nx > maxX) maxX = nx;
+        }
+    }
+    // Clamp to reasonable range
+    return Math.max(baseW * 0.3, maxX * baseW * 1.05);
+}
+
+// ==================== DISPLAY RENDERED PAGES ====================
+function displayPages(pages) {
+    outputArea.innerHTML = '';
+    if (pages.length === 0) return;
+
+    for (let i = 0; i < pages.length; i++) {
+        const wrapper = document.createElement('div');
+        wrapper.style.textAlign = 'center';
+
+        const canvas = pages[i];
+        canvas.className = 'output-page';
+        canvas.style.maxWidth = '100%';
+        canvas.style.height = 'auto';
+        wrapper.appendChild(canvas);
+
+        const label = document.createElement('div');
+        label.className = 'page-number';
+        label.textContent = `Page ${i + 1} of ${pages.length}`;
+        wrapper.appendChild(label);
+
+        outputArea.appendChild(wrapper);
+    }
+
+    STATE.renderedPages = pages;
+    $('export-pdf-btn').disabled = false;
+}
+
+// ==================== PDF EXPORT ====================
+function exportPDF() {
+    if (STATE.renderedPages.length === 0) {
+        showToast('Render a document first!', 'warning');
+        return;
+    }
+
+    try {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({
+            orientation: 'portrait',
+            unit: 'pt',
+            format: 'letter',
+        });
+
+        for (let i = 0; i < STATE.renderedPages.length; i++) {
+            if (i > 0) doc.addPage('letter', 'portrait');
+            const imgData = STATE.renderedPages[i].toDataURL('image/jpeg', 0.95);
+            doc.addImage(imgData, 'JPEG', 0, 0, 612, 792);
+        }
+
+        doc.save('handwritten-document.pdf');
+        showToast('PDF exported successfully!', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('PDF export failed. Check console for details.', 'error');
+    }
+}
+
+// ==================== TAB NAVIGATION ====================
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    $(`${tab}-panel`).classList.add('active');
+}
+
+// ==================== EVENT BINDINGS ====================
+function init() {
+    // Build palette
+    buildPalette();
+    redrawCaptureCanvas();
+
+    // Tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // Character input
+    charInput.addEventListener('input', () => {
+        const val = charInput.value;
+        if (val.length > 0) {
+            selectCharacter(val.charAt(val.length - 1));
+            charInput.value = STATE.currentChar;
+        }
+    });
+
+    // Variation slot buttons
+    variationSlots.querySelectorAll('.var-slot').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!STATE.currentChar) { showToast('Select a character first', 'warning'); return; }
+            selectVariation(parseInt(btn.dataset.var));
+        });
+    });
+
+    // Canvas control buttons
+    $('undo-btn').addEventListener('click', undoStroke);
+    $('clear-btn').addEventListener('click', clearCanvas);
+    $('save-var-btn').addEventListener('click', saveVariation);
+
+    // Profile save/load
+    $('save-profile-btn').addEventListener('click', saveProfile);
+    $('load-profile-btn').addEventListener('click', () => $('profile-file-input').click());
+    $('profile-file-input').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => loadProfile(ev.target.result);
+        reader.readAsText(file);
+        e.target.value = ''; // reset so same file can be loaded again
+    });
+
+    // Settings sliders
+    ['set-char-size', 'set-line-spacing', 'set-shake', 'set-drift', 'set-imperf', 'set-ink-color'].forEach(id => {
+        $(id).addEventListener('input', updateSettingsDisplay);
+    });
+    updateSettingsDisplay();
+
+    // Text input — check missing chars
+    textInput.addEventListener('input', () => checkMissingChars(textInput.value));
+
+    // Render button
+    $('render-btn').addEventListener('click', () => {
+        const text = textInput.value;
+        if (!text.trim()) { showToast('Enter some text first!', 'warning'); return; }
+        if (Object.keys(STATE.profile).length === 0) {
+            showToast('No handwriting profile loaded! Capture some characters first.', 'error');
+            return;
+        }
+
+        $('render-btn').disabled = true;
+        $('render-btn').textContent = 'Rendering...';
+
+        // Use setTimeout to allow UI to update before heavy computation
+        setTimeout(() => {
+            const settings = getSettings();
+            const pages = renderDocument(text, settings);
+            displayPages(pages);
+            $('render-btn').disabled = false;
+            $('render-btn').innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Render Handwritten Document
+            `;
+            if (pages.length > 0) {
+                showToast(`Rendered ${pages.length} page${pages.length > 1 ? 's' : ''}`, 'success');
+            }
+        }, 50);
+    });
+
+    // Export PDF button
+    $('export-pdf-btn').addEventListener('click', exportPDF);
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+        // Ctrl+S to save profile (only in capture tab)
+        if (e.ctrlKey && e.key === 's') {
+            e.preventDefault();
+            if ($('capture-panel').classList.contains('active')) {
+                saveProfile();
+            }
+        }
+        // Ctrl+Enter to render (only in generate tab)
+        if (e.ctrlKey && e.key === 'Enter') {
+            if ($('generate-panel').classList.contains('active')) {
+                $('render-btn').click();
+            }
+        }
+    });
+}
+
+// Run on DOM ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}
+
+})();
+</script>
+</body>
+</html>
