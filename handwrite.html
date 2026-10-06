@@ -1210,11 +1210,15 @@ function checkMissingChars(text) {
 }
 
 // ==================== RENDERING ENGINE ====================
+const RES_SCALE = 6;
+
 function createPageCanvas() {
     const c = document.createElement('canvas');
-    c.width = PAGE_W;
-    c.height = PAGE_H;
+    c.width  = PAGE_W * RES_SCALE;     // 4896
+    c.height = PAGE_H * RES_SCALE;     // 6336
+    c.style.width = PAGE_W + 'px';     // keeps the on-screen size the same
     const ctx = c.getContext('2d');
+    ctx.scale(RES_SCALE, RES_SCALE);   // all drawing code keeps using 816×1056 coordinates
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, PAGE_W, PAGE_H);
     return c;
