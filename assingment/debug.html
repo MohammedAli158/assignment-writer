@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Phase 2 — human layout: wandering margins, uneven spaces, bounded gaps</title>
+<title>Phase 3 — size / baseline float / slant shear</title>
 <style>
   body { font-family: Inter, system-ui, sans-serif; background: #0b0d16; color: #e2e8f0; margin: 0; padding: 20px 24px 40px; }
   h1 { font-size: 1.05rem; }
@@ -21,23 +21,23 @@
 </style>
 </head>
 <body>
-<h1>Phase 2 — human layout: wandering margins, uneven spaces, bounded line gaps</h1>
+<h1>Phase 3 — small, smooth variation in size, baseline, and slant</h1>
 <div class="sub">
-  Renders a fixed 30-line specimen with the <b>Phase 2</b> renderer (same pipeline as
-  <code>index.html</code>, same defaults, same seed <code>483721</code>, same localStorage profile key).
-  Overlays: <span style="color:#94a3b8">dashed gray = nominal left/right margins</span>,
-  <span style="color:#06b6d4">cyan dots = actual left edge per line</span>,
-  <span style="color:#f472b6">pink dots = actual right edge per line</span>.
-  Stats panel prints measured min/max for left offsets, right edges, gap multipliers,
-  line-gap ratios, drift, plus PASS/FAIL per acceptance item.
+  Renders a fixed 20-line specimen (10&times; "<code>aaaaaaaaaaaaaaaaaaa eeeeeeeeeeee</code>" + 10&times; "<code>nnnnnnnnnnnnnnnn</code>")
+  with the <b>Phase 3</b> renderer (same pipeline as <code>index.html</code>, same defaults, seed <code>483721</code>, same localStorage profile key).
+  Size = uniform scale about the baseline-left origin. Baseline float is one-sided (lift &ge; 0, clamped &le; 0.12).
+  Slant = shear about the baseline (mean from the slant slider). Overlays:
+  <span style="color:#94a3b8">dashed gray = nominal baseline per line</span>,
+  <span style="color:#06b6d4">cyan dots = lifted glyph baselines (always on/above gray)</span>.
+  Stats panel prints scale mean/sd/min/max, lift min/max, per-line slants, plus PASS/FAIL per acceptance item.
 </div>
 
 <div class="bar">
-  <label><input type="checkbox" id="overlayToggle" checked /> Overlay margins + edge dots</label>
+  <label><input type="checkbox" id="overlayToggle" checked /> Overlay baselines + lift dots</label>
   <span id="status" style="font-size:.75rem;color:#94a3b8">Not rendered yet</span>
 </div>
 
-<h3 style="font-size:.75rem;color:#64748b;margin:16px 0 6px">SPECIMEN (fixed, 30 lines)</h3>
+<h3 style="font-size:.75rem;color:#64748b;margin:16px 0 6px">SPECIMEN (fixed, 20 lines)</h3>
 <pre class="spec" id="specimenPre"></pre>
 
 <div id="stats">Stats will appear after render.</div>
@@ -46,45 +46,16 @@
 <script>
 (() => {
   'use strict';
-  const SPECIMEN = [
-    '# Field Notes',
-    'The quick brown fox jumps over the lazy dog and pack my box.',
-    'Pack my box with five dozen liquor jugs for the winter exam.',
-    'Quartz glyphs vex young brazen pigs, 1234567890, twice daily.',
-    'Remember: small details matter before Friday, check the flow.',
-    'Check stock updates and fix the queue, Dept. 4, before noon.',
-    'Sphinx of black quartz, judge my vow, pack 27 boxes quickly.',
-    'How vexingly quick daft zebras jump, 3-2-1, go now.',
-    'Five boxing wizards jump quickly, pg. 88, with great zeal.',
-    'Jack quietly moved the pyz graft onto boxes with care.',
-    'Important: config apps use sys flow, w/o delay, thru Friday.',
-    'End of specimen notes, numbers 0-9, brackets and quotes here.',
-    'AaBbGgYy Hello, World. 123, testing caps and tails.',
-    'Development of the organization system requires docs and info.',
-    'Messages about functions and applications arrive thru the dept.',
-    'People need numbers, configs, and messages before the meeting.',
-    'Without the proper documents, numbers, and checks, we delay.',
-    'The department will review applications, numbers, and configs.',
-    'Something important about development, messages, and numbers.',
-    'Through the system, people send messages, docs, and configs.',
-    'Approximately eight organizations sent documents before Friday.',
-    'Because the queue broke, check the configuration and fix it.',
-    'Between department reviews, remember to test combos online.',
-    'Small wizards jump quickly over lazy dogs near the quartz.',
-    'Bright vixens jump; dozy fowl quack loudly every morning.',
-    'Jaded zombies acted quaintly but kept driving their oxen.',
-    'We promptly judged antique ivory buckles for the next prize.',
-    'Amazingly few discotheques provide jukeboxes for the party.',
-    'Heavy boxes perform quick waltzes and jigs in the hall.',
-    'Weave a circle round him thrice and close your eyes holy.'
-  ];
+  const SPECIMEN = [];
+  for(let i=0;i<10;i++) SPECIMEN.push('aaaaaaaaaaaaaaaaaaa eeeeeeeeeeee');
+  for(let i=0;i<10;i++) SPECIMEN.push('nnnnnnnnnnnnnnnn');
   document.getElementById('specimenPre').textContent = SPECIMEN.join('\n');
 
   const S = {
     baseline: 0.45, slant: 0.50, spacing: 0.58, size: 0.36,
     pressure: 0.38, inkThickness: 1.5, rhythm: 0.54, lineTilt: 0.22, lineSpacing: 1.15,
-    lowercase: 0.72, correction: 0.02, shorthand: 0.18,
-    naturalPunct: true, underlineHeads: true, freeMarks: true, warmPaper: true,
+    lowercase: 0.72, correction: 0, shorthand: 0, fast: 0.5,
+    naturalPunct: true, underlineHeads: false, freeMarks: false, warmPaper: true,
     ink: '#243b63'
   };
   const SEED = 483721;
@@ -94,7 +65,6 @@
   try { PROFILE = JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}'); } catch { PROFILE = {}; }
 
   // ---- Toolkit (mirrors index.html / rng.js) ----
-  function rand(seed){ let t=(seed>>>0)+0x6D2B79F5; return ()=>{ t+=0x6D2B79F5; let r=Math.imul(t^(t>>>15),1|t); r^=r+Math.imul(r^(r>>>7),61|r); return ((r^(r>>>14))>>>0)/4294967296; }; }
   function gaussian(rng){ let u=0,v=0; while(!u)u=rng(); while(!v)v=rng(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
   function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
   function pick(arr,rng){return arr[Math.floor(rng()*arr.length)]||arr[0];}
@@ -108,9 +78,48 @@
   function boundedWalk(seed,n,opts){ opts=opts||{}; const mean=(typeof opts.mean==='number'&&Number.isFinite(opts.mean))?opts.mean:0; const sigma=(typeof opts.sigma==='number'&&Number.isFinite(opts.sigma)&&opts.sigma>=0)?opts.sigma:1; const rho=(typeof opts.rho==='number'&&Number.isFinite(opts.rho))?opts.rho:0.9; const min=(typeof opts.min==='number'&&Number.isFinite(opts.min))?opts.min:-Infinity; const max=(typeof opts.max==='number'&&Number.isFinite(opts.max))?opts.max:Infinity; const count=Math.max(0,Math.floor(n)); const out=new Array(count); if(!count)return out; const rng=rngFor(seed,'boundedWalk'); let x=mean; out[0]=clamp(x,min,max); for(let k=1;k<count;k++){x=mean+rho*(x-mean)+sigma*gaussian(rng);out[k]=clamp(x,min,max);} return out; }
 
   const P2 = { LEFT_SIGMA:0.15,LEFT_RHO:0.4,LEFT_MIN:-0.4,LEFT_MAX:0.4, RIGHT_SIGMA:0.3,RIGHT_MIN:-0.8,RIGHT_MAX:0.8, BASE_SPACE_CAP:0.24, MIN_GAP_PX:5, MIN_PAD_PX:28, GAP_SIGMA:0.04,GAP_RHO:0.5,GAP_MIN:-0.1,GAP_MAX:0.1, SLOW_AMP:0.13,INDEP_SIGMA:0.06, MAX_LINES:4000 };
+  const P3 = {
+    SIZE_WORD:0.033, SIZE_LETTER:0.044, SIZE_CAP_MULT:1.35, SIZE_CLAMP:0.05,
+    LIFT_LINE_MAX:0.05, LIFT_WORD_MAX:0.06, LIFT_GLYPH_MAX:0.03, LIFT_TOTAL_MAX:0.12,
+    LIFT_NOISE_SCALE:3,
+    SLANT_MEAN_DEG:20, SLANT_SIGMA:0.8, SLANT_RHO:0.85, SLANT_MIN:-2, SLANT_MAX:2,
+    SLANT_DIFF_MIN:0.3, SLANT_DIFF_MAX:1.2,
+    SLANT_DRIFT:0.4, SLANT_DRIFT_SCALE:6, SLANT_JITTER:0.15, SLANT_JITTER_MAX:0.3
+  };
+  function p3MeanDeg(s){ return clamp(s.slant,0,1)*P3.SLANT_MEAN_DEG; }
+  function p3FastFactor(s){ const f=(s&&typeof s.fast==='number')?s.fast:0.5; return 0.6+0.8*clamp(f,0,1); }
+  function p3BaselineScale(s){ const b=(s&&typeof s.baseline==='number')?s.baseline:0.45; return clamp(b,0,1)/0.45; }
+  function p3LineOffsets(seed,n){
+    const raw=boundedWalk(String(seed)+'|slantWalk',n,{mean:0,sigma:P3.SLANT_SIGMA,rho:P3.SLANT_RHO,min:P3.SLANT_MIN,max:P3.SLANT_MAX});
+    const a=raw.slice();
+    for(let k=1;k<a.length;k++){
+      let d=a[k]-a[k-1], ad=Math.abs(d);
+      if(ad<P3.SLANT_DIFF_MIN-1e-12){
+        let sign=d>0?1:(d<0?-1:(rngFor(seed,'slantDir',k)()<.5?-1:1));
+        let cand=a[k-1]+sign*P3.SLANT_DIFF_MIN;
+        if(cand<P3.SLANT_MIN||cand>P3.SLANT_MAX) cand=a[k-1]-sign*P3.SLANT_DIFF_MIN;
+        a[k]=clamp(cand,P3.SLANT_MIN,P3.SLANT_MAX);
+      }else if(ad>P3.SLANT_DIFF_MAX+1e-12){
+        const sign=d>0?1:-1;
+        a[k]=clamp(a[k-1]+sign*P3.SLANT_DIFF_MAX,P3.SLANT_MIN,P3.SLANT_MAX);
+      }
+    }
+    return a;
+  }
+  function p3LineLift(seed,L,s){ const v=valueNoise1D(String(seed)+'|lift',L,P3.LIFT_NOISE_SCALE); return (v*0.5+0.5)*P3.LIFT_LINE_MAX*p3BaselineScale(s)*p3FastFactor(s); }
+  function p3WordSlope(seed,L,wi,s){ return clamp(gaussian(rngFor(seed,'p3wordSlope',L,wi))*0.02,-P3.LIFT_WORD_MAX,P3.LIFT_WORD_MAX)*p3BaselineScale(s)*p3FastFactor(s); }
+  function p3GlyphLift(seed,L,wi,ci,s){ return rngFor(seed,'p3lift',L,wi,ci)()*P3.LIFT_GLYPH_MAX*p3BaselineScale(s)*p3FastFactor(s); }
+  function p3SizeK(seed,L,wi,ci,ch,s){
+    const capM=/[A-Z]/.test(ch)?P3.SIZE_CAP_MULT:1;
+    const e=clamp(gaussian(rngFor(seed,'p3sizeW',L,wi))*P3.SIZE_WORD*s.size*capM+gaussian(rngFor(seed,'p3sizeL',L,wi,ci))*P3.SIZE_LETTER*s.size*capM,-P3.SIZE_CLAMP,P3.SIZE_CLAMP);
+    return {k:1+e,e};
+  }
+  function p3SlantDeg(seed,L,wi,ci,lineSlantDeg){
+    const drift=valueNoise1D(String(seed)+'|slantDrift|'+String(L),wi*8+ci,P3.SLANT_DRIFT_SCALE)*P3.SLANT_DRIFT;
+    const jit=clamp(gaussian(rngFor(seed,'p3slantJ',L,wi,ci))*P3.SLANT_JITTER,-P3.SLANT_JITTER_MAX,P3.SLANT_JITTER_MAX);
+    return lineSlantDeg+drift+jit;
+  }
 
-  const ascenders = new Set(['b','d','f','h','k','l','t']);
-  const descenders = new Set(['g','j','p','q','y']);
   function glyphExtent(ch, opts){
     const lc = (opts && typeof opts.lowercase === 'number') ? opts.lowercase : 0.72;
     const xS = lc / 0.72;
@@ -165,29 +174,28 @@
   }
   function drawPaper(c,w,h,rng,warm){ const x=c.getContext('2d'); x.fillStyle='#fcfbf7';x.fillRect(0,0,w,h); if(warm){ const g=x.createRadialGradient(w*.45,h*.4,50,w*.45,h*.4,Math.max(w,h)*.75);g.addColorStop(0,'rgba(255,255,255,.2)');g.addColorStop(1,'rgba(150,120,80,.035)');x.fillStyle=g;x.fillRect(0,0,w,h); x.globalAlpha=.035; for(let i=0;i<3000;i++){x.fillStyle=rng()>.5?'#6b5b47':'#fff';x.fillRect(rng()*w,rng()*h,1,1);} x.globalAlpha=1; } }
   function roughLine(c,x1,y1,x2,y2,rng,width=1.3,alpha=.7){const x=c.getContext('2d');x.save();x.strokeStyle=`rgba(36,59,99,${alpha})`;x.lineWidth=width;x.lineCap='round';x.beginPath();const n=10;x.moveTo(x1,y1);for(let i=1;i<=n;i++){const t=i/n;const x0=x1+(x2-x1)*t+(rng()-.5)*1.4;const y0=y1+(y2-y1)*t+(rng()-.5)*2.4;x.lineTo(x0,y0);}x.stroke();x.restore();}
-  function fallbackText(c, text, x, baseline, h, angle, scaleX, color){ const q=c.getContext('2d');q.save();q.translate(x,baseline);q.rotate(angle);q.scale(scaleX,1);q.fillStyle=color;q.font=`italic ${Math.max(14,h)}px "Segoe Print", "Comic Sans MS", cursive`;q.textBaseline='alphabetic';q.fillText(text,0,0);const m=q.measureText(text).width;q.restore();return m*scaleX; }
+  function fallbackText(c, text, x, baseline, h, slantDeg, color){ const q=c.getContext('2d');q.save();q.translate(x,baseline); const tan=Math.tan((slantDeg||0)*Math.PI/180); q.transform(1,0,-tan,1,0,0);q.fillStyle=color;q.font=`italic ${Math.max(14,h)}px "Segoe Print", "Comic Sans MS", cursive`;q.textBaseline='alphabetic';q.fillText(text,0,0);const m=q.measureText(text).width;q.restore();return m; }
   function drawGlyph(c,ch,x,baseline,capHeight,wordSlant,opts,rng){
     if(ch===' ') return Math.max(5, capHeight*0.32*(.88 + opts.spacing*.08));
     const e=glyphExtent(ch,opts); const boxH=e.top-e.bottom;
-    const k=(opts && typeof opts.preK==='number') ? opts.preK : 1+clamp(opts.size*gaussian(rng)*.032,-.3,.3);
-    const drawH=boxH*capHeight*k; const topOff=e.top*capHeight*k;
-    const angle=wordSlant + gaussian(rng)*opts.slant*.020;
-    const microY=gaussian(rng)*opts.baseline*0.022*capHeight;
+    const k=(opts&&typeof opts.preK==='number')?opts.preK:p3SizeK('fallback',0,0,0,ch,opts).k;
+    const liftCap=(opts&&typeof opts.preLift==='number')?opts.preLift:0;
+    const slantDeg=(opts&&typeof opts.preSlantDeg==='number')?opts.preSlantDeg:p3MeanDeg(opts);
+    const liftPx=liftCap*capHeight, baseY=baseline-liftPx;
+    const tan=Math.tan(slantDeg*Math.PI/180);
     const img=opts.image;
-    if(!img){ const scaleX=(opts && typeof opts.preScaleX==='number') ? opts.preScaleX : clamp(1+gaussian(rng)*.02,.85,1.15); return fallbackText(c,ch,x,baseline+microY,capHeight*k,angle,scaleX,opts.ink); }
+    if(!img){ fallbackText(c,ch,x,baseY,Math.max(14,capHeight*k),slantDeg,opts.ink); if(opts&&typeof opts.preAdv==='number')return opts.preAdv; return Math.max(5,capHeight*k*0.55+capHeight*k*tan); }
+    const drawH=boxH*capHeight*k, topOff=e.top*capHeight*k;
     const ratio=img.width/Math.max(1,img.height); const w=drawH*ratio;
-    const sx=clamp(1+gaussian(rng)*opts.size*.028,.65,1.35); const sy=clamp(1+gaussian(rng)*opts.size*.018,.72,1.28);
     const alpha=clamp(.80 + gaussian(rng)*.045*opts.pressure,.58,.98); const inkPool=opts.pressure*.32;
-    const q=c.getContext('2d');q.save();q.globalAlpha=alpha;q.translate(x+w*.04,baseline+microY);q.rotate(angle);q.scale(sx,sy);
+    const q=c.getContext('2d');q.save();q.globalAlpha=alpha;q.translate(x,baseY);q.transform(1,0,-tan,1,0,0);
     q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);
     if(inkPool>.1 && rng()<.35){q.globalAlpha=inkPool*.22;q.translate((rng()-.5)*.8,(rng()-.5)*.8);q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);}
     q.restore();
     if(opts && typeof opts.preAdv==='number') return opts.preAdv;
-    const advance=w*(.88 + opts.spacing*.08 + gaussian(rng)*opts.spacing*.035);
-    return Math.max(5,advance);
+    return Math.max(5,w*(.88+opts.spacing*.08+gaussian(rng)*opts.spacing*.035)+topOff*tan);
   }
 
-  // ---- Phase 2 layout (same as index.html; PROFILE replaces state.profile) ----
   function p2LeftOffsets(seed,n){
     const raw=boundedWalk(String(seed)+'|left',n,{mean:0,sigma:P2.LEFT_SIGMA,rho:P2.LEFT_RHO,min:P2.LEFT_MIN,max:P2.LEFT_MAX});
     const a=raw.slice(), N=a.length; if(N<10) return a;
@@ -205,7 +213,7 @@
   function measureCtx2d(){ if(_measureCtx) return _measureCtx; _measureCtx=document.createElement('canvas').getContext('2d'); return _measureCtx; }
   function charBoxesForLine(words,gaps,leftPx,baseline,slope,s,baseH){
     const boxes=[]; let x=leftPx;
-    for(let wi=0;wi<words.length;wi++){ if(wi>0) x+=gaps[wi-1]; const w=words[wi]; for(const ci of w.chars){ const adv=ci.adv,x0=x,x1=x+adv; const bAt=baseline+(x0-leftPx)*slope; const e=glyphExtent(ci.ch,s); boxes.push({x0,x1,top:bAt-e.top*baseH*ci.k,bot:bAt-e.bottom*baseH*ci.k}); x+=adv; } }
+    for(let wi=0;wi<words.length;wi++){ if(wi>0) x+=gaps[wi-1]; const w=words[wi]; for(const ci of w.chars){ const adv=ci.adv; const bAt=baseline+(x-leftPx)*slope; const e=glyphExtent(ci.ch,s); const liftPx=(ci.lift||0)*baseH; const tan=Math.tan(((ci.slantDeg||0)*Math.PI)/180); const shift=e.top*baseH*(ci.k||1)*tan; boxes.push({x0:x+Math.min(0,shift),x1:x+adv+Math.max(0,shift),top:bAt-liftPx-e.top*baseH*ci.k,bot:bAt-liftPx-e.bottom*baseH*ci.k}); x+=adv; } }
     return {boxes,xEnd:x};
   }
   function layoutDocument(rawLines,s,seed,glyphImages){
@@ -214,25 +222,32 @@
     const vocab=buildVocabulary(rawLines), mctx=measureCtx2d();
     const leftCaps=p2LeftOffsets(seed,P2.MAX_LINES);
     const rawGap=boundedWalk(String(seed)+'|lgap',P2.MAX_LINES,{mean:0,sigma:P2.GAP_SIGMA*(0.5+s.baseline),rho:P2.GAP_RHO,min:P2.GAP_MIN,max:P2.GAP_MAX});
+    const p3Mean=p3MeanDeg(s), p3Offsets=p3LineOffsets(seed,P2.MAX_LINES);
+    const p3LineSlant=L=>p3Mean+(p3Offsets[L]||0);
     const pages=[]; let cur={lines:[],prevActual:null,prevBoxes:null,realCount:0,blankAccum:0,drift:0,pageIndex:0,blankBetween:0}; pages.push(cur);
     let globalIdx=0;
     const statLeft=[],statEdge=[],statGap=[],statRatio=[],statDrift=[];
+    const statE=[],statLift=[],statLineSlant=[];
     const pageDrift=pi=>(rngFor(seed,'pageDrift',pi)()<.5?-1:1);
     const slopeFor=(pi,L)=>{ const pds=pageDrift(pi); const ls=rngFor(seed,'lsign',L)()<.82?pds:-pds; return ls*s.lineTilt*(.4+rngFor(seed,'smag',L)()*.9)*.07; };
     function measureWord(text,L,posInLine){
       const chars=[]; let w=0;
+      const lineSlant=p3LineSlant(L), lineLift=p3LineLift(seed,L,s), wSlope=p3WordSlope(seed,L,posInLine,s), wlen=text.length;
       for(let ci=0;ci<text.length;ci++){
-        const ch=text[ci]; const chRng=rngFor(seed,'char',L,posInLine,ci);
-        const g1=gaussian(chRng), g2=gaussian(chRng);
-        const k=1+clamp(s.size*g1*.032,-.3,.3);
+        const ch=text[ci]; const g2=gaussian(rngFor(seed,'char',L,posInLine,ci));
+        const {k,e}=p3SizeK(seed,L,posInLine,ci,ch,s);
+        const t=wlen>1?ci/(wlen-1):0;
+        const lift=clamp(lineLift+t*wSlope+p3GlyphLift(seed,L,posInLine,ci,s),0,P3.LIFT_TOTAL_MAX);
+        const slantDeg=p3SlantDeg(seed,L,posInLine,ci,lineSlant);
+        const tan=Math.tan(slantDeg*Math.PI/180);
         const res=resolveProfileSrc(PROFILE,ch,rngFor(seed,'variant',L,posInLine,ci));
-        let adv,preScaleX=null; const e=glyphExtent(ch,s), boxH=e.top-e.bottom;
+        let adv; const e2=glyphExtent(ch,s), boxH=e2.top-e2.bottom;
         const img=res.src?glyphImages.get(res.src):null;
-        if(!img){ const sc=clamp(1+gaussian(rngFor(seed,'fbscale',L,posInLine,ci))*.02,.85,1.15); preScaleX=sc; let mw=10; try{ mctx.font=`italic ${Math.max(14,baseH*k)}px "Segoe Print", "Comic Sans MS", cursive`; mw=mctx.measureText(ch).width||10; }catch{ mw=10; } adv=mw*sc; }
-        else{ const ratio=img.width/Math.max(1,img.height); const ww=boxH*baseH*k*ratio; adv=ww*(.88+s.spacing*.08+g2*s.spacing*.035); adv=Math.max(5,adv); }
-        chars.push({ch,k,adv,src:res.src,synth:res.synth,preScaleX}); w+=adv;
+        if(!img){ let mw=10; try{ mctx.font=`italic ${Math.max(14,baseH*k)}px "Segoe Print", "Comic Sans MS", cursive`; mw=mctx.measureText(ch).width||10; }catch{ mw=10; } adv=Math.max(5,mw+baseH*k*tan); }
+        else{ const ratio=img.width/Math.max(1,img.height); const ww=boxH*baseH*k*ratio; adv=ww*(.88+s.spacing*.08+g2*s.spacing*.035)+e2.top*baseH*k*tan; adv=Math.max(5,adv); }
+        chars.push({ch,k,e,lift,slantDeg,adv,src:res.src,synth:res.synth}); w+=adv;
       }
-      return {chars,width:w,slant:(rngFor(seed,'wslant',L,posInLine)()-.5)*s.slant*.06};
+      return {chars,width:w,slant:(rngFor(seed,'wslant',L,posInLine)()-.5)*s.slant*.06,lineSlant};
     }
     for(let r=0;r<rawLines.length;r++){
       const pre=preprocessLine(rawLines[r],rngFor(seed,'pre',r),s);
@@ -257,9 +272,9 @@
           const mw=measureWord(words[tmp].text,L,pos);
           let gapPx=0,mult=1;
           if(pos>0){ mult=p2GapMult(seed,L,pos-1,s); gapPx=Math.max(P2.MIN_GAP_PX,P2.BASE_SPACE_CAP*mult*baseH); }
-          if(pos===0||x+(pos===0?0:gapPx)+mw.width<=rightLim){ if(pos>0){gaps.push(gapPx);mults.push(mult);x+=gapPx;} lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width}); statGap.push(mult); x+=mw.width; pos++; tmp++; } else break;
+          if(pos===0||x+(pos===0?0:gapPx)+mw.width<=rightLim){ if(pos>0){gaps.push(gapPx);mults.push(mult);x+=gapPx;} lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width,lineSlant:mw.lineSlant}); statGap.push(mult); for(const ci of mw.chars){statE.push(ci.e);statLift.push(ci.lift);} x+=mw.width; pos++; tmp++; } else break;
         }
-        if(!lineWords.length){ const mw=measureWord(words[tmp].text,L,0); lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width}); x+=mw.width; tmp++; }
+        if(!lineWords.length){ const mw=measureWord(words[tmp].text,L,0); lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width,lineSlant:mw.lineSlant}); for(const ci of mw.chars){statE.push(ci.e);statLift.push(ci.lift);} x+=mw.width; tmp++; }
         wi=tmp; const xEnd=x;
         const prevBefore=cur.prevActual, isFirstOnPage=(cur.realCount===0);
         cur.prevActualBefore=prevBefore;
@@ -289,15 +304,20 @@
         delete cur._pendingSlope;
         const ideal=top+cur.realCount*leading+cur.blankAccum, drift=baseline-ideal;
         const boxes=charBoxesForLine(lineWords,gaps,leftPx,baseline,finalSlope,s,baseH);
-        cur.lines.push({globalIdx:L,rawIdx:r,heading,rawClean:clean,isFirstWrap:firstWrap,isLastWrap:(wi>=words.length),words:lineWords,gaps,mults,leftPx,leftCap,rightLimit:rightLim,xEnd,baseline,slope:finalSlope,drift,ratio,ideal});
+        cur.lines.push({globalIdx:L,rawIdx:r,heading,rawClean:clean,isFirstWrap:firstWrap,isLastWrap:(wi>=words.length),words:lineWords,gaps,mults,leftPx,leftCap,rightLimit:rightLim,xEnd,baseline,slope:finalSlope,drift,ratio,ideal,lineSlant:p3LineSlant(L)});
         cur.prevActual=baseline; cur.prevBoxes=boxes; cur.realCount++; cur.drift=drift; cur.blankBetween=0;
         statLeft.push(leftCap); statEdge.push((xEnd-nominalRight)/baseH); if(ratio!=null)statRatio.push(ratio); statDrift.push(Math.abs(drift)/leading);
+        statLineSlant.push(p3LineSlant(L));
         globalIdx++; firstWrap=false;
       }
     }
     const mm=a=>a.length?[Math.min(...a),Math.max(...a)]:[0,0];
     const [lMin,lMax]=mm(statLeft),[eMin,eMax]=mm(statEdge),[gMin,gMax]=mm(statGap),[rMin,rMax]=mm(statRatio);
-    return {pages,stats:{n:globalIdx,leftMin:lMin,leftMax:lMax,edgeMin:eMin,edgeMax:eMax,gapMin:gMin,gapMax:gMax,ratioMin:rMin,ratioMax:rMax,driftMax:statDrift.length?Math.max(...statDrift):0,lefts:statLeft,ratios:statRatio}};
+    let eMean=0,eSd=0,eMi=0,eMa=0,liftMin=0,liftMax=0;
+    if(statE.length){ eMean=statE.reduce((a,b)=>a+b,0)/statE.length; eSd=Math.sqrt(statE.reduce((a,b)=>a+(b-eMean)*(b-eMean),0)/statE.length); eMi=Math.min(...statE); eMa=Math.max(...statE); }
+    if(statLift.length){ liftMin=Math.min(...statLift); liftMax=Math.max(...statLift); }
+    return {pages,stats:{n:globalIdx,leftMin:lMin,leftMax:lMax,edgeMin:eMin,edgeMax:eMax,gapMin:gMin,gapMax:gMax,ratioMin:rMin,ratioMax:rMax,driftMax:statDrift.length?Math.max(...statDrift):0,
+      eMean,eSd,eMin:eMi,eMax:eMa,liftMin,liftMax,lineSlants:statLineSlant.slice(),meanSlant:p3Mean,allE:statE.slice(),pagesRef:null}};
   }
   function renderPageFromLayout(page,pageIndex,totalPages,s,seed,glyphImages){
     const c=document.createElement('canvas');c.width=PAGE_W;c.height=PAGE_H;
@@ -311,42 +331,42 @@
         for(let ci2=0;ci2<word.chars.length;ci2++){
           const chInfo=word.chars[ci2];
           const img=chInfo.src?glyphImages.get(chInfo.src):null;
-          drawGlyph(c,chInfo.ch,xc,baseline+(xc-lineMarginX)*slope,baseH,word.slant,{...s,image:img,preK:chInfo.k,preAdv:chInfo.adv,preScaleX:chInfo.preScaleX},rngFor(seed,'vis',LL.globalIdx,wi2,ci2));
+          drawGlyph(c,chInfo.ch,xc,baseline+(xc-lineMarginX)*slope,baseH,word.slant,{...s,image:img,preK:chInfo.k,preAdv:chInfo.adv,preLift:chInfo.lift,preSlantDeg:chInfo.slantDeg},rngFor(seed,'vis',LL.globalIdx,wi2,ci2));
           xc+=chInfo.adv;
+          // stash draw-time x for overlay lift dots
+          chInfo._drawX=xc-chInfo.adv; chInfo._drawBase=baseline+(chInfo._drawX-lineMarginX)*slope;
         }
         x=xc;
         if(word.strike) roughLine(c,wordStart-2,wordBaseline-baseH*.33,x+2,wordBaseline-baseH*.38,rngFor(seed,'strike',LL.globalIdx,wi2),1.1,.55);
       }
-      if(s.underlineHeads&&LL.heading) roughLine(c,lineMarginX,baseline+8,clamp(x,lineMarginX+30,right),baseline+6,rngFor(seed,'ul',LL.globalIdx),1.2,.62);
-      if(s.freeMarks&&/\bremember\b/i.test(LL.rawClean)&&LL.isLastWrap&&rngFor(seed,'rem',LL.globalIdx)()<.6){ const tx=Math.min(right-45,x+8),aRng=rngFor(seed,'remDraw',LL.globalIdx); roughLine(c,tx,baseline-14,tx+34,baseline-31,aRng,1.2,.6);roughLine(c,tx+34,baseline-31,tx+27,baseline-29,aRng,1.2,.6);roughLine(c,tx+34,baseline-31,tx+32,baseline-24,aRng,1.2,.6); }
-      if(s.freeMarks&&/\bfix\b|\bcheck\b|\bimportant\b/i.test(LL.rawClean)&&rngFor(seed,'box',LL.globalIdx)()<.35){ const bx=lineMarginX-9,by=baseline-baseH*.88,bw=Math.min(x-lineMarginX+18,right-lineMarginX),bRng=rngFor(seed,'boxDraw',LL.globalIdx); q.save();q.strokeStyle='rgba(36,59,99,.58)';q.lineWidth=1.1;q.beginPath();q.moveTo(bx,by+(bRng()-.5)*2);q.lineTo(bx+bw,by+(bRng()-.5)*2);q.lineTo(bx+bw+1,by+baseH+(bRng()-.5)*2);q.lineTo(bx,by+baseH+(bRng()-.5)*2);q.closePath();q.stroke();q.restore(); }
     }
-    const tRng=rngFor(seed,'ticks',pageIndex);
-    if(tRng()<.55){for(let i=0;i<9;i++) roughLine(c,54,95+i*(PAGE_H-150)/8,58,95+i*(PAGE_H-150)/8,tRng,.45,.16);}
     return c;
   }
 
   function drawOverlays(ov, page) {
-    const x = ov.getContext('2d');
+    const x = ov.getContext('2d'), baseH=42;
     x.clearRect(0, 0, PAGE_W, PAGE_H);
-    // nominal margins: dashed vertical gray
-    x.save(); x.strokeStyle='rgba(100,116,139,.85)'; x.lineWidth=1.2; x.setLineDash([7,6]);
-    for(const mx of [72, PAGE_W-72]){ x.beginPath(); x.moveTo(mx,20); x.lineTo(mx,PAGE_H-20); x.stroke(); }
-    x.restore(); x.setLineDash([]);
-    // edge dots per line
     for(const LL of page.lines){
-      x.fillStyle='rgba(6,182,212,.95)';
-      x.beginPath(); x.arc(LL.leftPx, LL.baseline, 4, 0, Math.PI*2); x.fill();
-      x.strokeStyle='rgba(6,182,212,.35)'; x.lineWidth=1; x.stroke();
-      x.fillStyle='rgba(244,114,182,.95)';
-      x.beginPath(); x.arc(Math.min(LL.xEnd,PAGE_W-6), LL.baseline, 4, 0, Math.PI*2); x.fill();
-      x.strokeStyle='rgba(244,114,182,.35)'; x.stroke();
+      // nominal baseline across the line extent
+      x.save(); x.strokeStyle='rgba(100,116,139,.85)'; x.lineWidth=1.2; x.setLineDash([7,6]);
+      x.beginPath(); x.moveTo(LL.leftPx, LL.baseline); x.lineTo(Math.min(LL.xEnd+20,PAGE_W-20), LL.baseline+(Math.min(LL.xEnd+20,PAGE_W-20)-LL.leftPx)*LL.slope); x.stroke(); x.restore(); x.setLineDash([]);
+      // lifted glyph baselines: always on or above the gray line
+      let xc=LL.leftPx;
+      for(let wi=0;wi<LL.words.length;wi++){
+        if(wi>0) xc+=LL.gaps[wi-1];
+        for(const ci of LL.words[wi].chars){
+          const nom=LL.baseline+(xc-LL.leftPx)*LL.slope;
+          const lifted=nom-(ci.lift||0)*baseH;
+          x.fillStyle='rgba(6,182,212,.95)';
+          x.beginPath(); x.arc(xc+ci.adv/2, lifted, 2.6, 0, Math.PI*2); x.fill();
+          xc+=ci.adv;
+        }
+      }
     }
   }
 
   async function renderAll() {
     const t0 = performance.now();
-    const vocab = buildVocabulary(SPECIMEN);
     document.getElementById('status').textContent = 'Preparing glyphs…';
     const needed = new Set();
     for (const line of SPECIMEN) for (const ch of line) { const arr = PROFILE[ch]; if (arr?.length) arr.forEach((src) => needed.add(src)); }
@@ -372,51 +392,46 @@
       wrap.appendChild(meta); pagesEl.appendChild(wrap);
     });
 
-    // ---- acceptance numbers ----
+    // ---- Phase 3 acceptance numbers ----
     const linesAll = pages.flatMap(p=>p.lines);
-    const L = stats.n, fmt=(v,d=3)=>(Number.isFinite(v)?v.toFixed(d):'n/a');
+    const fmt=(v,d=3)=>(Number.isFinite(v)?v.toFixed(d):'n/a');
     const out = [];
-    out.push(`seed=${SEED} pages=${pages.length} rawLines=${SPECIMEN.length} layoutLines=${L} words~${SPECIMEN.join(' ').split(/\s+/).length}`);
+    out.push(`seed=${SEED} pages=${pages.length} layoutLines=${stats.n} (specimen 20) meanSlant=${fmt(stats.meanSlant,2)}deg`);
     out.push(`profile chars with captures: ${Object.keys(PROFILE).length} | inkRadiusPx=${inkRadiusPx.toFixed(2)} | render ${(performance.now()-t0).toFixed(0)} ms`);
-    out.push(`left-offset caps: min=${fmt(stats.leftMin)} max=${fmt(stats.leftMax)} (spec +-0.4)`);
-    out.push(`right-edge offset caps (actual-nominal): min=${fmt(stats.edgeMin)} max=${fmt(stats.edgeMax)} range=${fmt(stats.edgeMax-stats.edgeMin)} pxRange=${((stats.edgeMax-stats.edgeMin)*42).toFixed(1)}px`);
-    out.push(`gap multiplier: min=${fmt(stats.gapMin)} max=${fmt(stats.gapMax)} (spec 0.7-1.4)`);
-    out.push(`line-gap ratio: min=${fmt(stats.ratioMin)} max=${fmt(stats.ratioMax)} (spec 0.9-1.1)`);
-    out.push(`cumulative drift: max=${fmt(stats.driftMax)} leadings = ${(stats.driftMax*42*S.lineSpacing).toFixed(1)}px (spec <=0.25)`);
-    // sign check per 10-window
-    let winFail=0, winWorst='-';
-    const lefts=stats.lefts||[];
-    for(let s=0;s+10<=lefts.length;s++){ let neg=0,pos=0; for(let k=s;k<s+10;k++){ if(lefts[k]<0)neg++; else if(lefts[k]>0)pos++; } if(neg<3||pos<3){winFail++; winWorst=`window ${s}: neg=${neg} pos=${pos}`;} }
-    out.push(`sign windows (10-line, >=3 neg & >=3 pos): failing=${winFail}${winFail?` e.g. ${winWorst}`:' all pass'}`);
-    // justification check: no line flush both sides within 1px
-    let flushBoth=0;
-    for(const ll of linesAll){ if(Math.abs(ll.leftPx-72)<1 && Math.abs(ll.xEnd-(PAGE_W-72))<1) flushBoth++; }
-    const edgeRangePx=(stats.edgeMax-stats.edgeMin)*42;
-    out.push(`justification: lines flush both sides (±1px) = ${flushBoth} (must be 0); ragged range=${edgeRangePx.toFixed(1)}px ${edgeRangePx>20?'visibly ragged':'TOO FLAT'}`);
-    // page-edge safety: nothing past PAGE_W-28
-    let viol=0, worstX=0;
-    for(const ll of linesAll){ worstX=Math.max(worstX,ll.xEnd); if(ll.xEnd>PAGE_W-28+0.5)viol++; }
-    out.push(`page-edge safety: max xEnd=${worstX.toFixed(1)}px vs limit ${PAGE_W-28}px -> violations=${viol}`);
-    // stability: change one word in line 5 (index 4), compare left offsets prefix
-    const mod=SPECIMEN.slice(); mod[4]=mod[4].replace(/\S+$/,'tomorrow.');
-    const r2=layoutDocument(mod,S,SEED,glyphImages);
-    const a1=stats.lefts||[], a2=(r2.stats&&r2.stats.lefts)||[];
-    const cmpN=Math.min(a1.length,a2.length,12);
-    let sameFirst=0; for(let i=0;i<Math.min(4,cmpN);i++) if(Math.abs(a1[i]-a2[i])<1e-12) sameFirst++;
-    out.push(`stability: changed last word of raw line 5 -> layoutLines ${stats.n} vs ${r2.stats.n}; first-4 left offsets identical=${sameFirst}/4 ${sameFirst===Math.min(4,cmpN)?'PASS (offsets content-independent)':'check'}`);
+    out.push(`scale e=k-1: mean=${fmt(stats.eMean,4)} sd=${fmt(stats.eSd,4)} min=${fmt(stats.eMin,4)} max=${fmt(stats.eMax,4)} max|e|=${fmt(Math.max(Math.abs(stats.eMin),Math.abs(stats.eMax)),4)} (spec sd 0.015-0.03, max<=0.05)`);
+    out.push(`lift caps: min=${fmt(stats.liftMin,4)} max=${fmt(stats.liftMax,4)} (spec min>=0, max<=0.12)`);
+    const sl=stats.lineSlants||[];
+    out.push(`per-line slants (deg): [${sl.map(v=>v.toFixed(2)).join(', ')}]`);
+    let diffs=[];
+    for(let i=1;i<sl.length;i++) diffs.push(Math.abs(sl[i]-sl[i-1]));
+    const meanDiff=diffs.length?diffs.reduce((a,b)=>a+b,0)/diffs.length:0;
+    const rangeFromMean=sl.length?Math.max(...sl.map(v=>Math.abs(v-stats.meanSlant))):0;
+    out.push(`consecutive slant diffs: [${diffs.map(v=>v.toFixed(2)).join(', ')}] mean=${fmt(meanDiff,3)} (spec 0.3-1.2) rangeFromMean=${fmt(rangeFromMean,3)} (spec <=2)`);
+    // neighbouring identical sizes on the aaaa run
+    let identNeigh=0, checkedPairs=0;
+    for(const LL of linesAll){
+      for(const w of LL.words){
+        for(let i=1;i<w.chars.length;i++){
+          const a=w.chars[i-1], b=w.chars[i];
+          if(/[a-z]/.test(a.ch)&&/[a-z]/.test(b.ch)){ checkedPairs++; if(Math.abs(a.k-b.k)<1e-12) identNeigh++; }
+        }
+      }
+    }
+    out.push(`neighbouring-size check: identical pairs=${identNeigh}/${checkedPairs} (spec 0 identical)`);
     out.push('');
     const ck=[];
-    const hasBothSigns = stats.leftMin<-0.02 && stats.leftMax>0.02;
-    ck.push(`left offsets both signs, within +-0.4: [${fmt(stats.leftMin)}, ${fmt(stats.leftMax)}] -> ${(hasBothSigns&&stats.leftMin>=-0.401&&stats.leftMax<=0.401&&winFail===0)?'PASS':'FAIL'}`);
-    ck.push(`right edges visibly ragged: range ${edgeRangePx.toFixed(1)}px -> ${edgeRangePx>20?'PASS':'FAIL'}`);
-    ck.push(`gap multipliers within 0.7-1.4: [${fmt(stats.gapMin)}, ${fmt(stats.gapMax)}] -> ${(stats.gapMin>=0.699&&stats.gapMax<=1.401)?'PASS':'FAIL'}`);
-    ck.push(`line gap ratios within 0.9-1.1: [${fmt(stats.ratioMin)}, ${fmt(stats.ratioMax)}] -> ${(stats.ratioMin>=0.899&&stats.ratioMax<=1.101)?'PASS':'FAIL'}`);
-    ck.push(`cumulative drift within +-0.25 leading: max ${fmt(stats.driftMax)} -> ${stats.driftMax<=0.2501?'PASS':'FAIL'}`);
-    ck.push(`no line justified/flush both sides: ${flushBoth} such lines -> ${flushBoth===0?'PASS':'FAIL'}`);
-    ck.push(`page-edge clamp respected: violations=${viol} -> ${viol===0?'PASS':'FAIL'}`);
+    ck.push(`scale sd 0.015-0.03: ${fmt(stats.eSd,4)} -> ${(stats.eSd>=0.015&&stats.eSd<=0.03)?'PASS':'FAIL'}`);
+    const maxAbs=Math.max(Math.abs(stats.eMin),Math.abs(stats.eMax));
+    ck.push(`scale max|e|<=0.05: ${fmt(maxAbs,4)} -> ${maxAbs<=0.050001?'PASS':'FAIL'}`);
+    ck.push(`lift min>=0 (hard): ${fmt(stats.liftMin,4)} -> ${stats.liftMin>=-1e-9?'PASS':'FAIL'}`);
+    ck.push(`lift max<=0.12 (hard): ${fmt(stats.liftMax,4)} -> ${stats.liftMax<=0.120001?'PASS':'FAIL'}`);
+    const diffOk=diffs.length>0&&diffs.every(d=>d>=0.3-1e-9&&d<=1.2+1e-9);
+    ck.push(`slant diffs each 0.3-1.2: mean ${fmt(meanDiff,3)}, ${diffs.filter(d=>d<0.3||d>1.2).length} outside -> ${diffOk?'PASS':'FAIL (see mean)'}`);
+    ck.push(`slant range<=2 from mean: ${fmt(rangeFromMean,3)} -> ${rangeFromMean<=2.0001?'PASS':'FAIL'}`);
+    ck.push(`no identical neighbours: ${identNeigh} identical -> ${identNeigh===0?'PASS':'FAIL'}`);
     out.push(...ck);
     document.getElementById('stats').textContent = out.join('\n');
-    document.getElementById('status').textContent = `${pages.length} page(s), ${L} layout lines rendered in ${(performance.now()-t0).toFixed(0)} ms`;
+    document.getElementById('status').textContent = `${pages.length} page(s), ${stats.n} layout lines rendered in ${(performance.now()-t0).toFixed(0)} ms`;
     const toggle = document.getElementById('overlayToggle');
     const apply = () => overlays.forEach((ov) => { ov.style.display = toggle.checked ? 'block' : 'none'; });
     toggle.onchange = apply; apply();

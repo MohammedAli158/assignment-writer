@@ -94,6 +94,7 @@ Remember: small details matter.</textarea>
           <div class="range-row"><label>Word rhythm</label><input id="rhythm" class="range" type="range" min="0" max="100" value="54"><output id="rhythmOut">54%</output></div>
           <div class="range-row"><label>Line tilt</label><input id="lineTilt" class="range" type="range" min="0" max="100" value="22"><output id="lineTiltOut">22%</output></div>
           <div class="range-row"><label>Line spacing</label><input id="lineSpacing" class="range" type="range" min="85" max="160" value="115"><output id="lineSpacingOut">115%</output></div>
+          <div class="range-row"><label>Fast writing</label><input id="fastWrite" class="range" type="range" min="0" max="100" value="50"><output id="fastWriteOut">50%</output></div>
         </div>
 
         <div class="title-sm" style="margin-top:19px">Lowercase + organic structure</div>
@@ -246,6 +247,87 @@ Remember: small details matter.</textarea>
     MAX_LINES: 4000
   };
 
+  // ---- Phase 3: small smooth size / lift / slant variation (cap units) ----
+  // Size: k = 1 + e, e = wordTerm + letterTerm, clamp |e| <= 0.05.
+  // Sigmas below are per s.size=1.0; at the default s.size=0.36 the combined
+  // sd is ~0.02 (measured 0.0209), rare tails hit the 0.05 clamp.
+  // Lift: one-sided, total clamped to [0, 0.12]. Slant: shear about the
+  // baseline, mean from the slant slider (0..20 deg), per-line offsets from
+  // a bounded walk (sigma 0.8 deg, clamp +-2, consecutive diffs enforced
+  // 0.3-1.2 like the Phase-2 left-offset fix), in-line drift +-0.4 deg and
+  // per-glyph jitter +-0.3 deg.
+  const P3 = {
+    SIZE_WORD: 0.033, SIZE_LETTER: 0.044, SIZE_CAP_MULT: 1.35, SIZE_CLAMP: 0.05,
+    LIFT_LINE_MAX: 0.05, LIFT_WORD_MAX: 0.06, LIFT_GLYPH_MAX: 0.03, LIFT_TOTAL_MAX: 0.12,
+    LIFT_NOISE_SCALE: 3,
+    SLANT_MEAN_DEG: 20, SLANT_SIGMA: 0.8, SLANT_RHO: 0.85, SLANT_MIN: -2, SLANT_MAX: 2,
+    SLANT_DIFF_MIN: 0.3, SLANT_DIFF_MAX: 1.2,
+    SLANT_DRIFT: 0.4, SLANT_DRIFT_SCALE: 6, SLANT_JITTER: 0.15, SLANT_JITTER_MAX: 0.3
+  };
+  function p3MeanDeg(s){ return clamp(s.slant,0,1)*P3.SLANT_MEAN_DEG; }
+  function p3FastFactor(s){
+    const f=(s && typeof s.fast==='number')?s.fast:0.5;
+    return 0.6+0.8*clamp(f,0,1);
+  }
+  function p3BaselineScale(s){
+    const b=(s && typeof s.baseline==='number')?s.baseline:0.45;
+    return clamp(b,0,1)/0.45;
+  }
+  // Per-line slant offsets (degrees, mean 0). Base is a bounded walk, then a
+  // single forward enforcement pass nudges consecutive diffs into
+  // [0.3, 1.2] (bound-aware: tries both directions at the +-2 rails).
+  // Prefix-stable like the Phase-2 left fix: line k never changes when later
+  // lines are added.
+  function p3LineOffsets(seed,n){
+    const raw=boundedWalk(String(seed)+'|slantWalk',n,{mean:0,sigma:P3.SLANT_SIGMA,rho:P3.SLANT_RHO,min:P3.SLANT_MIN,max:P3.SLANT_MAX});
+    const a=raw.slice();
+    for(let k=1;k<a.length;k++){
+      let d=a[k]-a[k-1], ad=Math.abs(d);
+      if(ad<P3.SLANT_DIFF_MIN-1e-12){
+        let sign=d>0?1:(d<0?-1:(rngFor(seed,'slantDir',k)()<.5?-1:1));
+        let cand=a[k-1]+sign*P3.SLANT_DIFF_MIN;
+        if(cand<P3.SLANT_MIN||cand>P3.SLANT_MAX) cand=a[k-1]-sign*P3.SLANT_DIFF_MIN;
+        a[k]=clamp(cand,P3.SLANT_MIN,P3.SLANT_MAX);
+      }else if(ad>P3.SLANT_DIFF_MAX+1e-12){
+        const sign=d>0?1:-1;
+        a[k]=clamp(a[k-1]+sign*P3.SLANT_DIFF_MAX,P3.SLANT_MIN,P3.SLANT_MAX);
+      }
+    }
+    return a;
+  }
+  function p3LineLift(seed,L,s){
+    const v=valueNoise1D(String(seed)+'|lift',L,P3.LIFT_NOISE_SCALE); // [-1,1]
+    const base=(v*0.5+0.5)*P3.LIFT_LINE_MAX;
+    return base*p3BaselineScale(s)*p3FastFactor(s);
+  }
+  function p3WordSlope(seed,L,wi,s){
+    const r=rngFor(seed,'p3wordSlope',L,wi);
+    return clamp(gaussian(r)*0.02,-P3.LIFT_WORD_MAX,P3.LIFT_WORD_MAX)*p3BaselineScale(s)*p3FastFactor(s);
+  }
+  function p3GlyphLift(seed,L,wi,ci,s){
+    const r=rngFor(seed,'p3lift',L,wi,ci);
+    return r()*P3.LIFT_GLYPH_MAX*p3BaselineScale(s)*p3FastFactor(s);
+  }
+  function p3SizeK(seed,L,wi,ci,ch,s){
+    const upper=/[A-Z]/.test(ch);
+    const capM=upper?P3.SIZE_CAP_MULT:1;
+    const wR=rngFor(seed,'p3sizeW',L,wi);
+    const lR=rngFor(seed,'p3sizeL',L,wi,ci);
+    const e=clamp(
+      gaussian(wR)*P3.SIZE_WORD*s.size*capM + gaussian(lR)*P3.SIZE_LETTER*s.size*capM,
+      -P3.SIZE_CLAMP,P3.SIZE_CLAMP);
+    return {k:1+e,e};
+  }
+  // Total glyph slant in degrees: line slant + slow in-line drift + tiny
+  // per-glyph jitter. Deterministic from (L,wi,ci) so measuring and drawing
+  // agree exactly.
+  function p3SlantDeg(seed,L,wi,ci,lineSlantDeg){
+    const drift=valueNoise1D(String(seed)+'|slantDrift|'+String(L),wi*8+ci,P3.SLANT_DRIFT_SCALE)*P3.SLANT_DRIFT;
+    const jR=rngFor(seed,'p3slantJ',L,wi,ci);
+    const jit=clamp(gaussian(jR)*P3.SLANT_JITTER,-P3.SLANT_JITTER_MAX,P3.SLANT_JITTER_MAX);
+    return lineSlantDeg+drift+jit;
+  }
+
   // ---- Capture ------------------------------------------------------------
   const cap = $('#captureCanvas'), ctx = cap.getContext('2d');
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -288,6 +370,7 @@ Remember: small details matter.</textarea>
     baseline:+$('#baseline').value/100, slant:+$('#slant').value/100, spacing:+$('#spacing').value/100, size:+$('#sizeVar').value/100,
     pressure:+$('#pressure').value/100, inkThickness:+$('#inkThickness').value, rhythm:+$('#rhythm').value/100, lineTilt:+$('#lineTilt').value/100, lineSpacing:+$('#lineSpacing').value/100,
     lowercase:+$('#lowercase').value/100, correction:+$('#correction').value/100, shorthand:+$('#shorthand').value/100,
+    fast:(document.querySelector('#fastWrite')?+document.querySelector('#fastWrite').value/100:0.5),
     naturalPunct:$('#naturalPunct').checked, underlineHeads:$('#underlineHeads').checked, freeMarks:$('#freeMarks').checked, warmPaper:$('#warmPaper').checked,
     ink:$('#inkColor').value
   }; }
@@ -463,57 +546,82 @@ Remember: small details matter.</textarea>
 
   function roughLine(c,x1,y1,x2,y2,rng,width=1.3,alpha=.7){const x=c.getContext('2d');x.save();x.strokeStyle=`rgba(36,59,99,${alpha})`;x.lineWidth=width;x.lineCap='round';x.beginPath();const n=10;x.moveTo(x1,y1);for(let i=1;i<=n;i++){const t=i/n;const x0=x1+(x2-x1)*t+(rng()-.5)*1.4;const y0=y1+(y2-y1)*t+(rng()-.5)*2.4;x.lineTo(x0,y0);}x.stroke();x.restore();}
 
-  function fallbackText(c, text, x, baseline, h, angle, scaleX, color){
-    const q=c.getContext('2d');q.save();q.translate(x,baseline);q.rotate(angle);q.scale(scaleX,1);q.fillStyle=color;q.font=`italic ${Math.max(14,h)}px "Segoe Print", "Comic Sans MS", cursive`;q.textBaseline='alphabetic';q.fillText(text,0,0);const m=q.measureText(text).width;q.restore();return m*scaleX;
+  // Phase 3: shear about the baseline-left origin (x += -y*tan), never
+  // rotation about the center. y grows DOWN on canvas, so a positive (right)
+  // lean uses c=-tan: the top (y<0) shifts +x.
+  function fallbackText(c, text, x, baseline, h, slantDeg, color){
+    const q=c.getContext('2d');q.save();q.translate(x,baseline);
+    const tan=Math.tan((slantDeg||0)*Math.PI/180);
+    q.transform(1,0,-tan,1,0,0);q.fillStyle=color;q.font=`italic ${Math.max(14,h)}px "Segoe Print", "Comic Sans MS", cursive`;q.textBaseline='alphabetic';q.fillText(text,0,0);const m=q.measureText(text).width;q.restore();return m;
   }
 
   function drawGlyph(c,ch,x,baseline,capHeight,wordSlant,opts,rng){
     if(ch===' ') return Math.max(5, capHeight*0.32*(.88 + opts.spacing*.08));
-    // Map the glyph's own box onto its class's vertical extent (cap units,
-    // y-up, baseline 0). Canvas y grows DOWN, so convert ONCE here: the
-    // image top sits topOff px above the baseline.
+    // Phase 3: uniform scale k about the baseline-left origin + one-sided
+    // lift + baseline shear. Layout precomputes k/lift/slant/adv (same
+    // numbers used for measuring) so measuring and drawing agree exactly.
+    // Backward-compat path (no pre*) derives them the same way measureWord
+    // does, keyed by opts.preL/preWi/preCi when available.
     const e=glyphExtent(ch,opts);
     const boxH=e.top-e.bottom;
-    // Phase 2: when layout precomputed k/advance (same numbers used for
-    // measuring), reuse them so measuring and drawing agree exactly.
-    // Otherwise (backward compat) derive from rng as before.
-    const k=(opts && typeof opts.preK==='number')
-      ? opts.preK
-      : 1+clamp(opts.size*gaussian(rng)*.032,-.3,.3);
-    const drawH=boxH*capHeight*k;
-    const topOff=e.top*capHeight*k;
-    const angle=wordSlant + gaussian(rng)*opts.slant*.020;
-    // Baseline jitter kept in cap units until this final px conversion
-    // (0.022*42px ≈ 0.9px, matching the previous feel at default size).
-    const microY=gaussian(rng)*opts.baseline*0.022*capHeight;
+    let k, liftCap, slantDeg;
+    if(opts && typeof opts.preK==='number'){ k=opts.preK; }
+    else{
+      const L=(opts&&typeof opts.preL==='number')?opts.preL:0,
+            wi=(opts&&typeof opts.preWi==='number')?opts.preWi:0,
+            ci=(opts&&typeof opts.preCi==='number')?opts.preCi:0;
+      k=p3SizeK('fallback',L,wi,ci,ch,opts).k;
+    }
+    if(opts && typeof opts.preLift==='number'){ liftCap=opts.preLift; }
+    else{
+      const L=(opts&&typeof opts.preL==='number')?opts.preL:0,
+            wi=(opts&&typeof opts.preWi==='number')?opts.preWi:0,
+            ci=(opts&&typeof opts.preCi==='number')?opts.preCi:0;
+      const wlen=(opts&&typeof opts.preWlen==='number'&&opts.preWlen>1)?opts.preWlen:1;
+      const t=wlen>1?ci/(wlen-1):0;
+      liftCap=clamp(p3LineLift('fallback',L,opts)+t*p3WordSlope('fallback',L,wi,opts)+p3GlyphLift('fallback',L,wi,ci,opts),0,P3.LIFT_TOTAL_MAX);
+    }
+    if(opts && typeof opts.preSlantDeg==='number'){ slantDeg=opts.preSlantDeg; }
+    else{
+      const L=(opts&&typeof opts.preL==='number')?opts.preL:0,
+            wi=(opts&&typeof opts.preWi==='number')?opts.preWi:0,
+            ci=(opts&&typeof opts.preCi==='number')?opts.preCi:0;
+      slantDeg=p3MeanDeg(opts)+p3SlantDeg('fallback',L,wi,ci,0);
+    }
+    const liftPx=liftCap*capHeight;
+    const baseY=baseline-liftPx;
+    const tan=Math.tan(slantDeg*Math.PI/180);
     let img=null;
     // synchronous image cache is not possible; caller injects loaded image in opts
     img=opts.image;
-    // Scale factors are clamped strictly positive: a sign flip here would mirror
-    // the glyph, which should never happen no matter how much jitter is applied.
     // No captured image: the system font carries its own correct metrics, so
     // draw it at capHeight (NOT at the class-box height) and let 'a'/'.'/'g'
     // size themselves. (The lowercase slider does not resize fallback text;
     // fallback only occurs with an empty profile.)
     if(!img){
-      const scaleX=(opts && typeof opts.preScaleX==='number')
-        ? opts.preScaleX
-        : clamp(1+gaussian(rng)*.02,.85,1.15);
-      const measured=fallbackText(c,ch,x,baseline+microY,capHeight*k,angle,scaleX,opts.ink);
-      return measured;
+      const fontPx=Math.max(14,capHeight*k);
+      fallbackText(c,ch,x,baseY,fontPx,slantDeg,opts.ink);
+      if(opts && typeof opts.preAdv==='number') return opts.preAdv;
+      const shift=capHeight*k*tan;
+      return Math.max(5,fontPx*0.55+shift);
     }
     // Width comes from the glyph's own aspect ratio — never a fixed grid.
+    // Sizes already include k (scale about the baseline-left origin: the box
+    // origin sits at (0,0) after translate, so enlarging w/drawH grows up and
+    // right from the baseline, never floating the baseline).
+    const drawH=boxH*capHeight*k;
+    const topOff=e.top*capHeight*k;
     const ratio=img.width/Math.max(1,img.height); const w=drawH*ratio;
-    const sx=clamp(1+gaussian(rng)*opts.size*.028,.65,1.35); const sy=clamp(1+gaussian(rng)*opts.size*.018,.72,1.28);
     const alpha=clamp(.80 + gaussian(rng)*.045*opts.pressure,.58,.98);
     const inkPool=opts.pressure*.32;
-    const q=c.getContext('2d');q.save();q.globalAlpha=alpha;q.translate(x+w*.04,baseline+microY);q.rotate(angle);q.scale(sx,sy);
+    const q=c.getContext('2d');q.save();q.globalAlpha=alpha;q.translate(x,baseY);q.transform(1,0,-tan,1,0,0);
     q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);
     if(inkPool>.1 && rng()<.35){q.globalAlpha=inkPool*.22;q.translate((rng()-.5)*.8,(rng()-.5)*.8);q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);}
     q.restore();
     if(opts && typeof opts.preAdv==='number') return opts.preAdv;
-    const advance=w*(.88 + opts.spacing*.08 + gaussian(rng)*opts.spacing*.035);
-    return Math.max(5,advance);
+    const shift=topOff*tan;
+    const core=(.88 + opts.spacing*.08 + gaussian(rng)*opts.spacing*.035);
+    return Math.max(5,w*core+shift);
   }
 
   // ================= PHASE 2: human layout =================
@@ -566,7 +674,9 @@ Remember: small details matter.</textarea>
   }
 
   // Per-character boxes for the descender/ascender non-touch check (Phase 1
-  // extents, cap units -> px). Ignores micro-rotation; adds pad instead.
+  // extents, cap units -> px). Phase 3: boxes use the same k/lift/shear as
+  // measuring/drawing (lift moves the box up, shear widens it), plus a small
+  // pad. Ignores in-line slope beyond the baseline term (pad covers it).
   function charBoxesForLine(words,gaps,leftPx,baseline,slope,s,baseH){
     const boxes=[]; let x=leftPx;
     for(let wi=0;wi<words.length;wi++){
@@ -576,7 +686,11 @@ Remember: small details matter.</textarea>
         const adv=ci.adv, x0=x, x1=x+adv;
         const bAt=baseline+(x0-leftPx)*slope;
         const e=glyphExtent(ci.ch,s);
-        boxes.push({x0,x1,top:bAt-e.top*baseH*ci.k,bot:bAt-e.bottom*baseH*ci.k});
+        const liftPx=(ci.lift||0)*baseH;
+        const tan=Math.tan(((ci.slantDeg||0)*Math.PI)/180);
+        const shift=e.top*baseH*(ci.k||1)*tan;
+        const bx0=x0+Math.min(0,shift), bx1=x0+adv+Math.max(0,shift);
+        boxes.push({x0:bx0,x1:bx1,top:bAt-liftPx-e.top*baseH*ci.k,bot:bAt-liftPx-e.bottom*baseH*ci.k});
         x+=adv;
       }
     }
@@ -593,11 +707,17 @@ Remember: small details matter.</textarea>
     const mctx=measureCtx2d();
     const leftCaps=p2LeftOffsets(seed,P2.MAX_LINES);
     const rawGap=boundedWalk(String(seed)+'|lgap',P2.MAX_LINES,{mean:0,sigma:P2.GAP_SIGMA*(0.5+s.baseline),rho:P2.GAP_RHO,min:P2.GAP_MIN,max:P2.GAP_MAX});
+    // Phase 3 per-line slants (degrees, offsets) + mean. lineSlant[L] is the
+    // reported per-line slant; glyph angles add drift+jitter on top.
+    const p3Mean=p3MeanDeg(s);
+    const p3Offsets=p3LineOffsets(seed,P2.MAX_LINES);
+    const p3LineSlant=L=>p3Mean+(p3Offsets[L]||0);
     const pages=[];
     let cur={lines:[],prevActual:null,prevBoxes:null,realCount:0,blankAccum:0,drift:0,pageIndex:0,blankBetween:0};
     pages.push(cur);
     let globalIdx=0;
     const statLeft=[],statEdge=[],statGap=[],statRatio=[],statDrift=[];
+    const statE=[],statLift=[],statLineSlant=[];
     const pageDrift=pi=>(rngFor(seed,'pageDrift',pi)()<.5?-1:1);
     const slopeFor=(pi,L)=>{
       const pds=pageDrift(pi);
@@ -607,34 +727,44 @@ Remember: small details matter.</textarea>
 
     function measureWord(text,L,posInLine){
       const chars=[]; let w=0;
+      const lineSlant=p3LineSlant(L);
+      const lineLift=p3LineLift(seed,L,s);
+      const wSlope=p3WordSlope(seed,L,posInLine,s);
+      const wlen=text.length;
       for(let ci=0;ci<text.length;ci++){
         const ch=text[ci];
         const chRng=rngFor(seed,'char',L,posInLine,ci);
-        const g1=gaussian(chRng), g2=gaussian(chRng);
-        const k=1+clamp(s.size*g1*.032,-.3,.3);
+        const g2=gaussian(chRng);
+        // Phase 3 size: slow word term + per-letter term (capitals wider).
+        const {k,e}=p3SizeK(seed,L,posInLine,ci,ch,s);
+        // Phase 3 lift: one-sided, clamped [0,0.12]. t is position in word
+        // so the word rises or sags as a unit; glyph term is [0,0.03].
+        const t=wlen>1?ci/(wlen-1):0;
+        const lift=clamp(lineLift+t*wSlope+p3GlyphLift(seed,L,posInLine,ci,s),0,P3.LIFT_TOTAL_MAX);
+        const slantDeg=p3SlantDeg(seed,L,posInLine,ci,lineSlant);
+        const tan=Math.tan(slantDeg*Math.PI/180);
         const vRng=rngFor(seed,'variant',L,posInLine,ci);
         const res=resolveProfileSrc(state.profile,ch,vRng);
-        let adv,preScaleX=null;
-        const e=glyphExtent(ch,s), boxH=e.top-e.bottom;
+        let adv;
+        const e2=glyphExtent(ch,s), boxH=e2.top-e2.bottom;
         const img=res.src?glyphImages.get(res.src):null;
         if(!img){
-          const fsRng=rngFor(seed,'fbscale',L,posInLine,ci);
-          const sc=clamp(1+gaussian(fsRng)*.02,.85,1.15);
-          preScaleX=sc;
           let mw=10;
           try{ mctx.font=`italic ${Math.max(14,baseH*k)}px "Segoe Print", "Comic Sans MS", cursive`; mw=mctx.measureText(ch).width||10; }catch{ mw=10; }
-          adv=mw*sc;
+          adv=Math.max(5,mw+baseH*k*tan);
         }else{
           const ratio=img.width/Math.max(1,img.height);
           const ww=boxH*baseH*k*ratio;
-          adv=ww*(.88+s.spacing*.08+g2*s.spacing*.035);
+          const topOff=e2.top*baseH*k;
+          adv=ww*(.88+s.spacing*.08+g2*s.spacing*.035)+topOff*tan;
           adv=Math.max(5,adv);
         }
-        chars.push({ch,k,adv,src:res.src,synth:res.synth,preScaleX});
+        chars.push({ch,k,e,lift,slantDeg,adv,src:res.src,synth:res.synth});
         w+=adv;
       }
+      // word.slant kept for compat; glyph-level preSlantDeg is authoritative.
       const slant=(rngFor(seed,'wslant',L,posInLine)()-.5)*s.slant*.06;
-      return {chars,width:w,slant};
+      return {chars,width:w,slant,lineSlant,lineLift};
     }
 
     for(let r=0;r<rawLines.length;r++){
@@ -688,8 +818,9 @@ Remember: small details matter.</textarea>
           const need=(pos===0?0:gapPx)+mw.width;
           if(pos===0 || x+need<=rightLim){
             if(pos>0){ gaps.push(gapPx); mults.push(mult); x+=gapPx; }
-            lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width});
+            lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width,lineSlant:mw.lineSlant});
             statGap.push(mult);
+            for(const ci of mw.chars){ statE.push(ci.e); statLift.push(ci.lift); }
             x+=mw.width; pos++; tmp++;
           }else break;
         }
@@ -698,7 +829,8 @@ Remember: small details matter.</textarea>
         // the *limit*, the word itself is rare and stays as drawn).
         if(!lineWords.length){
           const mw=measureWord(words[tmp].text,L,0);
-          lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width});
+          lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width,lineSlant:mw.lineSlant});
+          for(const ci of mw.chars){ statE.push(ci.e); statLift.push(ci.lift); }
           x+=mw.width; tmp++;
         }
         wi=tmp;
@@ -793,7 +925,8 @@ Remember: small details matter.</textarea>
           isFirstWrap:firstWrap,isLastWrap:(wi>=words.length),
           words:lineWords,gaps,mults,leftPx,leftCap,
           rightLimit:rightLim,xEnd,baseline,slope:finalSlope,
-          drift,prevBefore,blankBetw,ratio,ideal
+          drift,prevBefore,blankBetw,ratio,ideal,
+          lineSlant:p3LineSlant(L)
         };
         cur.lines.push(LL);
         cur.prevActual=baseline; cur.prevBoxes=boxes;
@@ -801,6 +934,7 @@ Remember: small details matter.</textarea>
         statLeft.push(leftCap); statEdge.push((xEnd-nominalRight)/baseH);
         if(ratio!=null) statRatio.push(ratio);
         statDrift.push(Math.abs(drift)/leading);
+        statLineSlant.push(LL.lineSlant);
         globalIdx++; firstWrap=false;
       }
     }
@@ -808,7 +942,16 @@ Remember: small details matter.</textarea>
     const [lMin,lMax]=minMax(statLeft), [eMin,eMax]=minMax(statEdge);
     const [gMin,gMax]=minMax(statGap), [rMin,rMax]=minMax(statRatio);
     const dMax=statDrift.length?Math.max(...statDrift):0;
-    return {pages,stats:{n:globalIdx,leftMin:lMin,leftMax:lMax,edgeMin:eMin,edgeMax:eMax,gapMin:gMin,gapMax:gMax,ratioMin:rMin,ratioMax:rMax,driftMax:dMax}};
+    // Phase 3 stats: scale e (k-1) and lift (cap units), per-line slants.
+    let scMean=0,scSd=0,scMin=0,scMax=0,liftMin=0,liftMax=0;
+    if(statE.length){
+      scMean=statE.reduce((a,b)=>a+b,0)/statE.length;
+      scSd=Math.sqrt(statE.reduce((a,b)=>a+(b-scMean)*(b-scMean),0)/statE.length);
+      scMin=Math.min(...statE); scMax=Math.max(...statE);
+    }
+    if(statLift.length){ liftMin=Math.min(...statLift); liftMax=Math.max(...statLift); }
+    return {pages,stats:{n:globalIdx,leftMin:lMin,leftMax:lMax,edgeMin:eMin,edgeMax:eMax,gapMin:gMin,gapMax:gMax,ratioMin:rMin,ratioMax:rMax,driftMax:dMax,
+      eMean:scMean,eSd:scSd,eMin:scMin,eMax:scMax,liftMin,liftMax,lineSlants:statLineSlant.slice(),meanSlant:p3Mean}};
   }
 
   function renderPageFromLayout(page,pageIndex,totalPages,s,seed,glyphImages){
@@ -830,7 +973,7 @@ Remember: small details matter.</textarea>
           const localBaseline=baseline+(xc-lineMarginX)*slope;
           const visRng=rngFor(seed,'vis',LL.globalIdx,wi2,ci2);
           const img=chInfo.src?glyphImages.get(chInfo.src):null;
-          drawGlyph(c,chInfo.ch,xc,localBaseline,baseH,word.slant,{...s,image:img,preK:chInfo.k,preAdv:chInfo.adv,preScaleX:chInfo.preScaleX},visRng);
+          drawGlyph(c,chInfo.ch,xc,localBaseline,baseH,word.slant,{...s,image:img,preK:chInfo.k,preAdv:chInfo.adv,preLift:chInfo.lift,preSlantDeg:chInfo.slantDeg,preL:LL.globalIdx,preWi:wi2,preCi:ci2,preWlen:word.chars.length},visRng);
           xc+=chInfo.adv;
         }
         x=xc;
@@ -889,7 +1032,7 @@ Remember: small details matter.</textarea>
   };
 
   $$('.tab').forEach(t=>t.onclick=()=>{$$('.tab').forEach(x=>x.classList.remove('active'));$$('.panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');$('#'+t.dataset.tab).classList.add('active');});
-  ['baseline','slant','spacing','sizeVar','pressure','rhythm','lineTilt','lineSpacing','lowercase','correction','shorthand'].forEach(id=>{const el=$('#'+id),out=$('#'+id+'Out');const sync=()=>out.textContent=el.value+(id==='lineSpacing'?'%':'%');el.oninput=sync;sync();});
+  ['baseline','slant','spacing','sizeVar','pressure','rhythm','lineTilt','lineSpacing','lowercase','correction','shorthand','fastWrite'].forEach(id=>{const el=$('#'+id),out=$('#'+id+'Out');const sync=()=>out.textContent=el.value+(id==='lineSpacing'?'%':'%');el.oninput=sync;sync();});
   (()=>{const el=$('#inkThickness'),out=$('#inkThicknessOut');const sync=()=>out.textContent=(+el.value).toFixed(1)+'px';el.oninput=sync;sync();})();
   refreshCaptureUI();
 
