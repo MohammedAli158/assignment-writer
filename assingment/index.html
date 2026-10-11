@@ -168,6 +168,84 @@ Remember: small details matter.</textarea>
   function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
   function pick(arr, rng){return arr[Math.floor(rng()*arr.length)] || arr[0];}
 
+  // ---- Phase 2 toolkit (inlined copy of rng.js; no modules so index.html
+  //      works over file:// too. Logic mirrors rng.js verbatim.) ----
+  function hashStr(s){
+    let h = 0x811c9dc5;
+    for(let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return h >>> 0;
+  }
+  function seedToUint32(seed){
+    if(typeof seed === 'number' && Number.isFinite(seed)) return seed >>> 0;
+    return hashStr(String(seed));
+  }
+  function mulberry32(a){
+    let t = (a >>> 0) + 0x6D2B79F5;
+    return function(){
+      t += 0x6D2B79F5;
+      let r = Math.imul(t ^ (t >>> 15), 1 | t);
+      r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function seededRng(seed){ return mulberry32(seedToUint32(seed)); }
+  // Stateless per-line sub-streams: rngFor(seed,"line",i) is identical no
+  // matter what order lines are laid out in or what other lines exist, so
+  // editing line 5 never reshuffles other lines' randomness.
+  function rngFor(seed, ...parts){
+    const key = [String(seed), ...parts.map(p=>String(p))].join('|');
+    return mulberry32(hashStr(key));
+  }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+  function smootherstep(t){
+    const x = clamp(t,0,1);
+    return x*x*x*(x*(x*6-15)+10);
+  }
+  function latticeValue(seed,i){
+    const h = hashStr(String(seed)+'|'+String(i));
+    return mulberry32(h)()*2-1;
+  }
+  // Smooth 1D value noise in [-1,1]; features ~scale units wide.
+  function valueNoise1D(seed,t,scaleOrOpts){
+    let scale = 1;
+    if(typeof scaleOrOpts === 'number') scale = scaleOrOpts;
+    else if(scaleOrOpts && typeof scaleOrOpts.scale === 'number') scale = scaleOrOpts.scale;
+    if(!(scale>0) || !Number.isFinite(scale)) scale = 1;
+    if(!Number.isFinite(t)) return 0;
+    const x = t/scale, i = Math.floor(x), f = x-i;
+    return lerp(latticeValue(seed,i), latticeValue(seed,i+1), smootherstep(f));
+  }
+  // Mean-reverting bounded walk (AR(1)+clamp), prefix-stable: first k values
+  // are identical for any n>=k, so extending the document never reshuffles
+  // earlier lines.
+  function boundedWalk(seed,n,opts){
+    opts = opts||{};
+    const mean = (typeof opts.mean==='number'&&Number.isFinite(opts.mean))?opts.mean:0;
+    const sigma = (typeof opts.sigma==='number'&&Number.isFinite(opts.sigma)&&opts.sigma>=0)?opts.sigma:1;
+    const rho = (typeof opts.rho==='number'&&Number.isFinite(opts.rho))?opts.rho:0.9;
+    const min = (typeof opts.min==='number'&&Number.isFinite(opts.min))?opts.min:-Infinity;
+    const max = (typeof opts.max==='number'&&Number.isFinite(opts.max))?opts.max:Infinity;
+    const count = Math.max(0, Math.floor(n));
+    const out = new Array(count);
+    if(!count) return out;
+    const rng = rngFor(seed,'boundedWalk');
+    let x = mean;
+    out[0] = clamp(x,min,max);
+    for(let k=1;k<count;k++){ x = mean + rho*(x-mean) + sigma*gaussian(rng); out[k]=clamp(x,min,max); }
+    return out;
+  }
+
+  // ---- Phase 2 layout constants (cap-height units until rasterization) ----
+  const P2 = {
+    LEFT_SIGMA: 0.15, LEFT_RHO: 0.4, LEFT_MIN: -0.4, LEFT_MAX: 0.4,
+    RIGHT_SIGMA: 0.3, RIGHT_MIN: -0.8, RIGHT_MAX: 0.8,
+    BASE_SPACE_CAP: 0.24,   // ~10px at 42px cap; x0.7-1.4 -> ~7-14px
+    MIN_GAP_PX: 5, MIN_PAD_PX: 28,
+    GAP_SIGMA: 0.04, GAP_RHO: 0.5, GAP_MIN: -0.1, GAP_MAX: 0.1,
+    SLOW_AMP: 0.13, INDEP_SIGMA: 0.06,
+    MAX_LINES: 4000
+  };
+
   // ---- Capture ------------------------------------------------------------
   const cap = $('#captureCanvas'), ctx = cap.getContext('2d');
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -396,8 +474,12 @@ Remember: small details matter.</textarea>
     // image top sits topOff px above the baseline.
     const e=glyphExtent(ch,opts);
     const boxH=e.top-e.bottom;
-    // Size slider stays live as a multiplier on the class box.
-    const k=1+clamp(opts.size*gaussian(rng)*.032,-.3,.3);
+    // Phase 2: when layout precomputed k/advance (same numbers used for
+    // measuring), reuse them so measuring and drawing agree exactly.
+    // Otherwise (backward compat) derive from rng as before.
+    const k=(opts && typeof opts.preK==='number')
+      ? opts.preK
+      : 1+clamp(opts.size*gaussian(rng)*.032,-.3,.3);
     const drawH=boxH*capHeight*k;
     const topOff=e.top*capHeight*k;
     const angle=wordSlant + gaussian(rng)*opts.slant*.020;
@@ -413,7 +495,13 @@ Remember: small details matter.</textarea>
     // draw it at capHeight (NOT at the class-box height) and let 'a'/'.'/'g'
     // size themselves. (The lowercase slider does not resize fallback text;
     // fallback only occurs with an empty profile.)
-    if(!img){ const scaleX=clamp(1+gaussian(rng)*.02,.85,1.15); const measured=fallbackText(c,ch,x,baseline+microY,capHeight*k,angle,scaleX,opts.ink); return measured; }
+    if(!img){
+      const scaleX=(opts && typeof opts.preScaleX==='number')
+        ? opts.preScaleX
+        : clamp(1+gaussian(rng)*.02,.85,1.15);
+      const measured=fallbackText(c,ch,x,baseline+microY,capHeight*k,angle,scaleX,opts.ink);
+      return measured;
+    }
     // Width comes from the glyph's own aspect ratio — never a fixed grid.
     const ratio=img.width/Math.max(1,img.height); const w=drawH*ratio;
     const sx=clamp(1+gaussian(rng)*opts.size*.028,.65,1.35); const sy=clamp(1+gaussian(rng)*opts.size*.018,.72,1.28);
@@ -423,62 +511,359 @@ Remember: small details matter.</textarea>
     q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);
     if(inkPool>.1 && rng()<.35){q.globalAlpha=inkPool*.22;q.translate((rng()-.5)*.8,(rng()-.5)*.8);q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);}
     q.restore();
+    if(opts && typeof opts.preAdv==='number') return opts.preAdv;
     const advance=w*(.88 + opts.spacing*.08 + gaussian(rng)*opts.spacing*.035);
     return Math.max(5,advance);
   }
 
-  function renderPage(lines, pageIndex, totalPages, s, seed, glyphImages, vocab){
-    const c=document.createElement('canvas');c.width=PAGE_W;c.height=PAGE_H;const rng=rand(seed + pageIndex*10007);drawPaper(c,PAGE_W,PAGE_H,rng,s.warmPaper);const q=c.getContext('2d');
-    const marginX=72, top=82, right=PAGE_W-72;let y=top;const baseH=42;const lineH=baseH*s.lineSpacing;
-    // A whole line drifts as ONE straight slope (rising or falling as you read
-    // left to right) rather than wobbling word to word. Lines on the same page
-    // mostly lean the same way, with each line's own steepness varying — the
-    // way a real hand drifts consistently rather than zigzagging line to line.
-    const pageDriftSign=rng()<.5?-1:1;
-    for(let li=0;li<lines.length;li++){
-      const raw=lines[li]; const line=preprocessLine(raw,rng,s.shorthand);
-      const heading=/^\s*#\s+/.test(line); const clean=line.replace(/^\s*#\s+/,'');
-      if(!clean.trim()){y+=lineH*.72;continue;}
-      // The left edge itself is inconsistent: one line sits a hair left of the
-      // nominal margin, the next a hair right of it, so a ruler laid along the
-      // margin would clip into some letters rather than just touching them all.
-      const lineMarginX=marginX + gaussian(rng)*2.2;
-      const lineSign=rng()<.82 ? pageDriftSign : -pageDriftSign;
-      const lineSlope=lineSign * s.lineTilt * (.4+rng()*.9) * .07;
-      let baseline=y + gaussian(rng)*s.baseline*1.1;
-      let x=lineMarginX;
-      const tokens=buildLineTokens(clean,vocab,s.correction,rng);
-      for(let ti=0;ti<tokens.length;ti++){
-        const tok=tokens[ti]; if(!tok.text)continue;
-        if(/^\s+$/.test(tok.text)){x += Math.max(5, 9 + gaussian(rng)*s.spacing*3.1 + (rng()-.5)*s.rhythm*3.3);continue;}
-        // Character slant (the per-letter italic angle) and line drift (the
-        // line's own rise/fall) are independent: with slant at zero, letters
-        // stay upright even while the line keeps drifting.
-        const wordSlant=(rng()-.5)*s.slant*.06;
-        const wordStart=x; const wordBaseline=baseline + (x-lineMarginX)*lineSlope;
-        for(const ch of tok.text){
-          const localBaseline=baseline + (x-lineMarginX)*lineSlope;
-          const imageSrc=resolveProfileSrc(state.profile,ch,rng); const image=imageSrc.src ? glyphImages.get(imageSrc.src) : null;
-          const renderedWidth=drawGlyph(c,ch,x,localBaseline,baseH,wordSlant,{...s,image},rng); x+=renderedWidth||0;
-        }
-        if(tok.strike){ roughLine(c,wordStart-2,wordBaseline-baseH*.33,x+2,wordBaseline-baseH*.38,rng,1.1,.55); }
+  // ================= PHASE 2: human layout =================
+  // All geometry in cap-height units until the final px conversion.
+  // Every random choice is rngFor(seed,...) indexed by line/word/char, never
+  // by call order, so editing line 5 never reshuffles other lines.
+  function p2LeftOffsets(seed,n){
+    const raw=boundedWalk(String(seed)+'|left',n,{mean:0,sigma:P2.LEFT_SIGMA,rho:P2.LEFT_RHO,min:P2.LEFT_MIN,max:P2.LEFT_MAX});
+    const a=raw.slice(), N=a.length;
+    if(N<10) return a;
+    // Enforce: every window of 10 has >=3 negative and >=3 positive.
+    // Single forward pass, flipping the LATEST offenders first: index s+9 is
+    // in no earlier window, so fixing window s never breaks windows <s.
+    // Magnitudes (|.|) are preserved, only signs of a few lines change.
+    for(let s=0;s+10<=N;s++){
+      let neg=0,pos=0;
+      for(let k=s;k<s+10;k++){ if(a[k]<0)neg++; else if(a[k]>0)pos++; }
+      if(neg<3){
+        let need=3-neg;
+        for(let k=s+9;k>=s&&need>0;k--){ if(a[k]>0){ let v=-Math.abs(a[k]); if(v<P2.LEFT_MIN)v=P2.LEFT_MIN; if(v===0)v=-0.08; a[k]=v; need--; } }
       }
-      if(s.underlineHeads && heading){roughLine(c,lineMarginX,y+8,clamp(x,lineMarginX+30,right),y+6,rng,1.2,.62);}
-      // Organic inline marks for explicit semantic cues.
-      if(s.freeMarks && /\bremember\b/i.test(clean) && rng()<.6){const tx=Math.min(right-45,x+8);roughLine(c,tx,y-14,tx+34,y-31,rng,1.2,.6);roughLine(c,tx+34,y-31,tx+27,y-29,rng,1.2,.6);roughLine(c,tx+34,y-31,tx+32,y-24,rng,1.2,.6);}
-      if(s.freeMarks && /\bfix\b|\bcheck\b|\bimportant\b/i.test(clean) && rng()<.35){const bx=lineMarginX-9,by=y-baseH*.88,bw=Math.min(x-lineMarginX+18,right-lineMarginX);q.save();q.strokeStyle='rgba(36,59,99,.58)';q.lineWidth=1.1;q.beginPath();q.moveTo(bx,by+(rng()-.5)*2);q.lineTo(bx+bw,by+(rng()-.5)*2);q.lineTo(bx+bw+1,by+baseH+(rng()-.5)*2);q.lineTo(bx,by+baseH+(rng()-.5)*2);q.closePath();q.stroke();q.restore();}
-      // Line-to-line spacing is also inconsistent, not a fixed grid.
-      y += lineH + gaussian(rng)*s.baseline*1.3 + (rng()-.5)*lineH*.1;
-      if(y>PAGE_H-90)break;
+      neg=0;pos=0;
+      for(let k=s;k<s+10;k++){ if(a[k]<0)neg++; else if(a[k]>0)pos++; }
+      if(pos<3){
+        let need=3-pos;
+        for(let k=s+9;k>=s&&need>0;k--){ if(a[k]<0){ let v=Math.abs(a[k]); if(v>P2.LEFT_MAX)v=P2.LEFT_MAX; if(v===0)v=0.08; a[k]=v; need--; } }
+      }
     }
-    // subtle left margin drift line like light notebook structure, not perfectly straight
-    if(rng()<.55){for(let i=0;i<9;i++) roughLine(c,54,95+i*(PAGE_H-150)/8,58,95+i*(PAGE_H-150)/8,rng,.45,.16);}
+    return a;
+  }
+  function p2RightOffset(seed,idx){
+    const r=rngFor(seed,'right',idx);
+    return clamp(gaussian(r)*P2.RIGHT_SIGMA,P2.RIGHT_MIN,P2.RIGHT_MAX);
+  }
+  function p2GapMult(seed,lineIdx,gapIdx,s){
+    const wpf=8-4*clamp(s.rhythm,0,1); // 8..4 words per feature
+    const slow=valueNoise1D(String(seed)+'|gap|'+String(lineIdx),gapIdx,wpf);
+    const slowPart=1+P2.SLOW_AMP*slow;
+    const rg=rngFor(seed,'gap',lineIdx,gapIdx);
+    const indep=1+gaussian(rg)*P2.INDEP_SIGMA*(0.4+1.2*clamp(s.spacing,0,1));
+    return clamp(slowPart*indep,0.7,1.4);
+  }
+
+  // Shared offscreen 2d context for measuring fallback glyphs during layout.
+  let _measureCtx=null;
+  function measureCtx2d(){
+    if(_measureCtx) return _measureCtx;
+    _measureCtx=document.createElement('canvas').getContext('2d');
+    return _measureCtx;
+  }
+
+  // Per-character boxes for the descender/ascender non-touch check (Phase 1
+  // extents, cap units -> px). Ignores micro-rotation; adds pad instead.
+  function charBoxesForLine(words,gaps,leftPx,baseline,slope,s,baseH){
+    const boxes=[]; let x=leftPx;
+    for(let wi=0;wi<words.length;wi++){
+      if(wi>0) x+=gaps[wi-1];
+      const w=words[wi];
+      for(const ci of w.chars){
+        const adv=ci.adv, x0=x, x1=x+adv;
+        const bAt=baseline+(x0-leftPx)*slope;
+        const e=glyphExtent(ci.ch,s);
+        boxes.push({x0,x1,top:bAt-e.top*baseH*ci.k,bot:bAt-e.bottom*baseH*ci.k});
+        x+=adv;
+      }
+    }
+    return {boxes,xEnd:x};
+  }
+
+  // Full document layout + pagination by actual y positions.
+  // Returns {pages:[{lines:[...],pageIndex}], stats:{...}}.
+  function layoutDocument(rawLines,s,seed,glyphImages){
+    const marginX=72, nominalRight=PAGE_W-72, top=82, bottom=PAGE_H-90;
+    const baseH=42, leading=baseH*s.lineSpacing;
+    const safetyMax=PAGE_W-P2.MIN_PAD_PX;
+    const vocab=buildVocabulary(rawLines);
+    const mctx=measureCtx2d();
+    const leftCaps=p2LeftOffsets(seed,P2.MAX_LINES);
+    const rawGap=boundedWalk(String(seed)+'|lgap',P2.MAX_LINES,{mean:0,sigma:P2.GAP_SIGMA*(0.5+s.baseline),rho:P2.GAP_RHO,min:P2.GAP_MIN,max:P2.GAP_MAX});
+    const pages=[];
+    let cur={lines:[],prevActual:null,prevBoxes:null,realCount:0,blankAccum:0,drift:0,pageIndex:0,blankBetween:0};
+    pages.push(cur);
+    let globalIdx=0;
+    const statLeft=[],statEdge=[],statGap=[],statRatio=[],statDrift=[];
+    const pageDrift=pi=>(rngFor(seed,'pageDrift',pi)()<.5?-1:1);
+    const slopeFor=(pi,L)=>{
+      const pds=pageDrift(pi);
+      const ls=rngFor(seed,'lsign',L)()<.82?pds:-pds;
+      return ls*s.lineTilt*(.4+rngFor(seed,'smag',L)()*.9)*.07;
+    };
+
+    function measureWord(text,L,posInLine){
+      const chars=[]; let w=0;
+      for(let ci=0;ci<text.length;ci++){
+        const ch=text[ci];
+        const chRng=rngFor(seed,'char',L,posInLine,ci);
+        const g1=gaussian(chRng), g2=gaussian(chRng);
+        const k=1+clamp(s.size*g1*.032,-.3,.3);
+        const vRng=rngFor(seed,'variant',L,posInLine,ci);
+        const res=resolveProfileSrc(state.profile,ch,vRng);
+        let adv,preScaleX=null;
+        const e=glyphExtent(ch,s), boxH=e.top-e.bottom;
+        const img=res.src?glyphImages.get(res.src):null;
+        if(!img){
+          const fsRng=rngFor(seed,'fbscale',L,posInLine,ci);
+          const sc=clamp(1+gaussian(fsRng)*.02,.85,1.15);
+          preScaleX=sc;
+          let mw=10;
+          try{ mctx.font=`italic ${Math.max(14,baseH*k)}px "Segoe Print", "Comic Sans MS", cursive`; mw=mctx.measureText(ch).width||10; }catch{ mw=10; }
+          adv=mw*sc;
+        }else{
+          const ratio=img.width/Math.max(1,img.height);
+          const ww=boxH*baseH*k*ratio;
+          adv=ww*(.88+s.spacing*.08+g2*s.spacing*.035);
+          adv=Math.max(5,adv);
+        }
+        chars.push({ch,k,adv,src:res.src,synth:res.synth,preScaleX});
+        w+=adv;
+      }
+      const slant=(rngFor(seed,'wslant',L,posInLine)()-.5)*s.slant*.06;
+      return {chars,width:w,slant};
+    }
+
+    for(let r=0;r<rawLines.length;r++){
+      const raw=rawLines[r];
+      // NOTE: fixed historical call bug (used to pass s.shorthand number, so
+      // shorthand never fired). Now passes settings object; slider works.
+      const pre=preprocessLine(raw,rngFor(seed,'pre',r),s);
+      const heading=/^\s*#\s+/.test(pre);
+      const clean=pre.replace(/^\s*#\s+/,'');
+      const tokens=buildLineTokens(clean,vocab,s.correction,rngFor(seed,'tok',r));
+      const words=[];
+      for(const t of tokens){
+        if(!t.text) continue;
+        if(/^\s+$/.test(t.text)) continue; // each whitespace run = one gap opportunity
+        words.push({text:t.text,strike:!!t.strike});
+      }
+      if(!words.length){
+        const bAdv=leading*.72;
+        // Blank at top of empty page contributes nothing visible: drop it.
+        if(cur.realCount===0&&cur.blankAccum===0){ continue; }
+        const nextPos=(cur.prevActual==null?top+cur.blankAccum:cur.prevActual)+bAdv;
+        if(nextPos+leading*.9>bottom && (cur.realCount>0||cur.blankAccum>0)){
+          cur={lines:[],prevActual:null,prevBoxes:null,realCount:0,blankAccum:0,drift:0,pageIndex:pages.length,blankBetween:0};
+          pages.push(cur);
+          continue; // drop leading blank on the fresh page
+        }
+        cur.blankAccum+=bAdv; cur.blankBetween+=bAdv;
+        if(cur.prevActual!=null) cur.prevActual+=bAdv;
+        // drift unchanged by blanks (ideal and actual advance equally)
+        continue;
+      }
+      let wi=0, firstWrap=true;
+      while(wi<words.length){
+        const L=globalIdx;
+        if(L>=P2.MAX_LINES) break;
+        const leftCap=leftCaps[L];
+        const leftPx=marginX+leftCap*baseH; // margin-jitter scale = 1 (no dedicated slider exists)
+        let rightLim=nominalRight+p2RightOffset(seed,L)*baseH;
+        rightLim=Math.min(rightLim,safetyMax);
+        const slope=slopeFor(cur.pageIndex,L);
+        // Accumulate words that fit within THIS line's own limit.
+        const lineWords=[],gaps=[],mults=[]; let x=leftPx, pos=0;
+        let tmp=wi;
+        while(tmp<words.length){
+          const mw=measureWord(words[tmp].text,L,pos);
+          let gapPx=0,mult=1;
+          if(pos>0){
+            mult=p2GapMult(seed,L,pos-1,s);
+            gapPx=Math.max(P2.MIN_GAP_PX,P2.BASE_SPACE_CAP*mult*baseH);
+          }
+          const need=(pos===0?0:gapPx)+mw.width;
+          if(pos===0 || x+need<=rightLim){
+            if(pos>0){ gaps.push(gapPx); mults.push(mult); x+=gapPx; }
+            lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width});
+            statGap.push(mult);
+            x+=mw.width; pos++; tmp++;
+          }else break;
+        }
+        // Pathological: first word wider than the line (huge token). Place it
+        // anyway on its own line so progress is guaranteed (safety clamp caps
+        // the *limit*, the word itself is rare and stays as drawn).
+        if(!lineWords.length){
+          const mw=measureWord(words[tmp].text,L,0);
+          lineWords.push({text:words[tmp].text,strike:words[tmp].strike,slant:mw.slant,chars:mw.chars,width:mw.width});
+          x+=mw.width; tmp++;
+        }
+        wi=tmp;
+        const xEnd=x;
+        // --- vertical placement for this layout line ---
+        const placeOnPage=(page,isFirst)=>{
+          let baseline, ratio=null;
+          if(isFirst){
+            const jRng=rngFor(seed,'baseJit',L);
+            const jit=gaussian(jRng)*s.baseline*1.1;
+            baseline=top+page.blankAccum+jit;
+          }else{
+            const rawR=1+rawGap[L];
+            const corr=-page.drift/(leading*2);
+            ratio=clamp(rawR+corr,0.9,1.1);
+            const jRng=rngFor(seed,'baseJitSmall',L);
+            const jit=gaussian(jRng)*s.baseline*0.5;
+            let tent=page.prevActual+leading*ratio+jit;
+            // Minimum: prev lowest descender must clear next tallest ascender
+            // at overlapping x (Phase 1 extents). X-aware so it rarely
+            // triggers (different words sit at different x). Capped at ratio
+            // 1.1 to preserve the line-gap bound: with the default 115%
+            // leading a full worst-case clearance (1.5 caps) would need 1.3x,
+            // so we clear up to 1.1x here (covers the common near-miss) rather
+            // than letting one tight pair blow the acceptance bound. A larger
+            // lineSpacing removes the cap pressure entirely.
+            if(page.prevBoxes){
+              const curBoxes=charBoxesForLine(lineWords,gaps,leftPx,tent,slope,s,baseH);
+              let need=0;
+              for(const p of page.prevBoxes.boxes){
+                // Inset 30% each side: advance width heavily overstates ink
+                // (side bearings). Only stem-on-stem overlap with <1px
+                // clearance counts; edge grazes do not.
+                for(const c of curBoxes.boxes){
+                  const px0=p.x0+(p.x1-p.x0)*0.35, px1=p.x1-(p.x1-p.x0)*0.35;
+                  const cx0=c.x0+(c.x1-c.x0)*0.35, cx1=c.x1-(c.x1-c.x0)*0.35;
+                  // Require >=4px of ink overlap: narrower grazes are bearings,
+                  // not visible stem touches. Keeps the check rare so drift
+                  // feedback (not collision pushes) governs line gaps.
+                  if(cx1>px0&&cx0<px1&&(Math.min(px1,cx1)-Math.max(px0,cx0))>=4){
+                    const d=p.bot+1-c.top;
+                    if(d>need) need=d;
+                  }
+                }
+              }
+              if(need>0){
+                const maxTent=page.prevActualBefore+leading*1.1;
+                tent=Math.min(tent+need,maxTent);
+              }
+            }
+            baseline=tent;
+            ratio=(baseline-page.prevActualBefore)/leading;
+            // Final clamp: micro-jitter tails must never push a ratio to
+            // e.g. 0.895. Clamping up only grows clearance; clamping down
+            // shaves <0.5px off a 1px pad.
+            if(ratio<0.9){ baseline=page.prevActualBefore+leading*0.9; ratio=0.9; }
+            else if(ratio>1.1){ baseline=page.prevActualBefore+leading*1.1; ratio=1.1; }
+          }
+          return {baseline,ratio};
+        };
+        // Snapshot prevActual before this line for ratio bookkeeping.
+        const prevBefore=cur.prevActual;
+        const blankBetw=cur.blankBetween;
+        const isFirstOnPage=(cur.realCount===0);
+        cur.prevActualBefore=prevBefore;
+        let {baseline,ratio}=placeOnPage(cur,isFirstOnPage);
+        // Pagination by actual position (bottom extent incl. descenders).
+        let maxDesc=0;
+        for(const w of lineWords) for(const ci of w.chars){
+          const e=glyphExtent(ci.ch,s);
+          maxDesc=Math.max(maxDesc,-e.bottom*baseH*ci.k);
+        }
+        if(baseline+maxDesc+4>bottom && cur.realCount>0){
+          // Move whole line to a fresh page; keep globalIdx (RNG stable).
+          cur={lines:[],prevActual:null,prevBoxes:null,realCount:0,blankAccum:0,drift:0,pageIndex:pages.length,blankBetween:0};
+          pages.push(cur);
+          const slope2=slopeFor(cur.pageIndex,L);
+          const jRng=rngFor(seed,'baseJit',L);
+          baseline=top+gaussian(jRng)*s.baseline*1.1;
+          ratio=null;
+          // rebuild boxes/slope for new page below
+          lineWords._slope=undefined;
+          cur._pendingSlope=slope2;
+        }
+        const finalSlope=(cur._pendingSlope!==undefined)?cur._pendingSlope:slope;
+        delete cur._pendingSlope;
+        const ideal=top+cur.realCount*leading+cur.blankAccum;
+        const drift=baseline-ideal;
+        const boxes=charBoxesForLine(lineWords,gaps,leftPx,baseline,finalSlope,s,baseH);
+        const LL={
+          globalIdx:L,rawIdx:r,heading,rawClean:clean,
+          isFirstWrap:firstWrap,isLastWrap:(wi>=words.length),
+          words:lineWords,gaps,mults,leftPx,leftCap,
+          rightLimit:rightLim,xEnd,baseline,slope:finalSlope,
+          drift,prevBefore,blankBetw,ratio,ideal
+        };
+        cur.lines.push(LL);
+        cur.prevActual=baseline; cur.prevBoxes=boxes;
+        cur.realCount++; cur.drift=drift; cur.blankBetween=0;
+        statLeft.push(leftCap); statEdge.push((xEnd-nominalRight)/baseH);
+        if(ratio!=null) statRatio.push(ratio);
+        statDrift.push(Math.abs(drift)/leading);
+        globalIdx++; firstWrap=false;
+      }
+    }
+    const minMax=a=>a.length?[Math.min(...a),Math.max(...a)]:[0,0];
+    const [lMin,lMax]=minMax(statLeft), [eMin,eMax]=minMax(statEdge);
+    const [gMin,gMax]=minMax(statGap), [rMin,rMax]=minMax(statRatio);
+    const dMax=statDrift.length?Math.max(...statDrift):0;
+    return {pages,stats:{n:globalIdx,leftMin:lMin,leftMax:lMax,edgeMin:eMin,edgeMax:eMax,gapMin:gMin,gapMax:gMax,ratioMin:rMin,ratioMax:rMax,driftMax:dMax}};
+  }
+
+  function renderPageFromLayout(page,pageIndex,totalPages,s,seed,glyphImages){
+    const c=document.createElement('canvas');c.width=PAGE_W;c.height=PAGE_H;
+    drawPaper(c,PAGE_W,PAGE_H,rngFor(seed,'pagePaper',pageIndex),s.warmPaper);
+    const q=c.getContext('2d');
+    const marginX=72, right=PAGE_W-72, baseH=42;
+    for(const LL of page.lines){
+      const lineMarginX=LL.leftPx, baseline=LL.baseline, slope=LL.slope;
+      let x=lineMarginX;
+      for(let wi2=0;wi2<LL.words.length;wi2++){
+        if(wi2>0) x+=LL.gaps[wi2-1];
+        const word=LL.words[wi2];
+        const wordStart=x;
+        const wordBaseline=baseline+(x-lineMarginX)*slope;
+        let xc=x;
+        for(let ci2=0;ci2<word.chars.length;ci2++){
+          const chInfo=word.chars[ci2];
+          const localBaseline=baseline+(xc-lineMarginX)*slope;
+          const visRng=rngFor(seed,'vis',LL.globalIdx,wi2,ci2);
+          const img=chInfo.src?glyphImages.get(chInfo.src):null;
+          drawGlyph(c,chInfo.ch,xc,localBaseline,baseH,word.slant,{...s,image:img,preK:chInfo.k,preAdv:chInfo.adv,preScaleX:chInfo.preScaleX},visRng);
+          xc+=chInfo.adv;
+        }
+        x=xc;
+        if(word.strike){ roughLine(c,wordStart-2,wordBaseline-baseH*.33,x+2,wordBaseline-baseH*.38,rngFor(seed,'strike',LL.globalIdx,wi2),1.1,.55); }
+      }
+      if(s.underlineHeads&&LL.heading){ roughLine(c,lineMarginX,baseline+8,clamp(x,lineMarginX+30,right),baseline+6,rngFor(seed,'ul',LL.globalIdx),1.2,.62); }
+      if(s.freeMarks&&/\bremember\b/i.test(LL.rawClean)&&LL.isLastWrap&&rngFor(seed,'rem',LL.globalIdx)()<.6){
+        const tx=Math.min(right-45,x+8), tb=baseline;
+        const aRng=rngFor(seed,'remDraw',LL.globalIdx);
+        roughLine(c,tx,tb-14,tx+34,tb-31,aRng,1.2,.6);roughLine(c,tx+34,tb-31,tx+27,tb-29,aRng,1.2,.6);roughLine(c,tx+34,tb-31,tx+32,tb-24,aRng,1.2,.6);
+      }
+      if(s.freeMarks&&/\bfix\b|\bcheck\b|\bimportant\b/i.test(LL.rawClean)&&rngFor(seed,'box',LL.globalIdx)()<.35){
+        const bx=lineMarginX-9,by=baseline-baseH*.88,bw=Math.min(x-lineMarginX+18,right-lineMarginX);
+        const bRng=rngFor(seed,'boxDraw',LL.globalIdx);
+        q.save();q.strokeStyle='rgba(36,59,99,.58)';q.lineWidth=1.1;q.beginPath();
+        q.moveTo(bx,by+(bRng()-.5)*2);q.lineTo(bx+bw,by+(bRng()-.5)*2);q.lineTo(bx+bw+1,by+baseH+(bRng()-.5)*2);q.lineTo(bx,by+baseH+(bRng()-.5)*2);q.closePath();q.stroke();q.restore();
+      }
+    }
+    const tRng=rngFor(seed,'ticks',pageIndex);
+    if(tRng()<.55){for(let i=0;i<9;i++) roughLine(c,54,95+i*(PAGE_H-150)/8,58,95+i*(PAGE_H-150)/8,tRng,.45,.16);}
     return c;
+  }
+
+  function renderPage(lines, pageIndex, totalPages, s, seed, glyphImages, vocab){
+    // Backward-compatible wrapper: layout this chunk as its own document.
+    // renderAll (below) no longer uses this; it calls layoutDocument directly
+    // so wrapping and pagination span the whole document.
+    const {pages}=layoutDocument(lines,s,seed,glyphImages);
+    return renderPageFromLayout({lines:pages.length?pages[0].lines:[]},pageIndex,totalPages,s,seed,glyphImages);
   }
 
   async function renderAll(){
     const text=$('#textInput').value.replace(/\r/g,''); const rawLines=text.split('\n'); const s=settings(); const seed=Math.floor(+$('#seedInput').value)||1;
-    const vocab=buildVocabulary(rawLines);
     if(!text.trim()){alert('Enter some text first.');return;}
     $('#renderStatus').textContent='Preparing glyphs…'; $('#renderBtn').disabled=true; $('#downloadPdf').disabled=true; $('#pages').innerHTML=''; state.renderedCanvases=[];
 
@@ -490,11 +875,9 @@ Remember: small details matter.</textarea>
     const inkRadiusPx=inkSliderToRadiusPx(s.inkThickness,+$('#inkThickness').min,+$('#inkThickness').max);
     const glyphImages=new Map();
     for(const [src,img] of rawGlyphImages) glyphImages.set(src, processInk(src,img,inkRadiusPx));
-    // Estimate page breaks by simple vertical budgeting. The final renderer also stops at page edges.
-    const linesPerPage=Math.max(1,Math.floor((PAGE_H-150)/(42*(s.lineSpacing/100))));const pages=[];for(let i=0;i<rawLines.length;i+=linesPerPage)pages.push(rawLines.slice(i,i+linesPerPage));
-    // Keep pages small enough for browsers; if huge input, split every 23 lines.
-    const actualPages=[]; let chunk=[]; for(const l of rawLines){chunk.push(l);if(chunk.length>=23){actualPages.push(chunk);chunk=[];}} if(chunk.length||!actualPages.length)actualPages.push(chunk);
-    for(let i=0;i<actualPages.length;i++){const c=renderPage(actualPages[i],i,actualPages.length,s,seed,glyphImages,vocab);state.renderedCanvases.push(c);const wrap=document.createElement('div');wrap.className='page-wrap';const cv=document.createElement('canvas');cv.className='page';cv.width=PAGE_W;cv.height=PAGE_H;cv.getContext('2d').drawImage(c,0,0);wrap.appendChild(cv);const meta=document.createElement('div');meta.className='page-meta';meta.textContent=`Page ${i+1} / ${actualPages.length}`;wrap.appendChild(meta);$('#pages').appendChild(wrap);}
+    // Phase 2: layout + paginate by actual line positions (no fixed line count).
+    const {pages}=layoutDocument(rawLines,s,seed,glyphImages);
+    for(let i=0;i<pages.length;i++){const c=renderPageFromLayout(pages[i],i,pages.length,s,seed,glyphImages);state.renderedCanvases.push(c);const wrap=document.createElement('div');wrap.className='page-wrap';const cv=document.createElement('canvas');cv.className='page';cv.width=PAGE_W;cv.height=PAGE_H;cv.getContext('2d').drawImage(c,0,0);wrap.appendChild(cv);const meta=document.createElement('div');meta.className='page-meta';meta.textContent=`Page ${i+1} / ${pages.length}`;wrap.appendChild(meta);$('#pages').appendChild(wrap);}
     $('#renderStatus').textContent=`${state.renderedCanvases.length} page${state.renderedCanvases.length===1?'':'s'} rendered`;$('#downloadPdf').disabled=false;$('#renderBtn').disabled=false;
   }
 
