@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 0 — toolkit unit tests</title>
+<style>
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0b0d16; color: #e2e8f0; margin: 0; padding: 24px; }
+  h1 { font-size: 1.1rem; }
+  .sub { color: #94a3b8; font-size: .8rem; margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  th, td { border: 1px solid rgba(148,163,184,.2); padding: 8px 10px; text-align: left; font-size: .8rem; }
+  th { color: #94a3b8; text-transform: uppercase; font-size: .68rem; letter-spacing: .08em; }
+  .pass { color: #34d399; font-weight: 800; }
+  .fail { color: #f87171; font-weight: 800; }
+  #summary { margin-top: 14px; font-weight: 800; }
+</style>
+</head>
+<body>
+<h1>Phase 0 — rng.js unit tests</h1>
+<div class="sub">Pure toolkit only (no DOM dependency, no Math.random). Each row is an acceptance assertion.</div>
+<table>
+  <thead><tr><th>Test</th><th>Result</th><th>Measured</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<div id="summary">Running…</div>
+
+<script type="module">
+import { seededRng, rngFor, valueNoise1D, boundedWalk, clamp, lerp, smoothstep } from './rng.js';
+
+const rows = [];
+function add(name, pass, measured) {
+  rows.push({ name, pass: !!pass, measured: String(measured) });
+}
+
+// 1. Determinism: same seed -> same numbers.
+{
+  const a = seededRng(12345), b = seededRng(12345);
+  const N = 100, sa = [], sb = [];
+  for (let i = 0; i < N; i++) { sa.push(a()); sb.push(b()); }
+  const same = sa.every((v, i) => v === sb[i]);
+  const inRange = sa.every((v) => v >= 0 && v < 1);
+  add('determinism: same seed gives same stream (n=100)', same && inRange,
+    `identical=${same} inRange[0,1)=${inRange}`);
+}
+// 2. Different seeds -> different numbers.
+{
+  const a = seededRng(111), b = seededRng(222);
+  let diff = 0;
+  for (let i = 0; i < 20; i++) if (a() !== b()) diff++;
+  add('determinism: different seeds give different streams', diff > 0,
+    `${diff}/20 values differ`);
+}
+// 3. Order independence of sub-streams.
+{
+  // Interleave other streams first, then request line 5; compare against a
+  // fresh request for line 5 with no prior calls.
+  const r1 = rngFor(777, 'line', 5);
+  const seq1 = [r1(), r1(), r1(), r1(), r1()];
+  const junk1 = rngFor(777, 'line', 1);
+  junk1(); junk1(); junk1();
+  const junk2 = rngFor(777, 'line', 9);
+  for (let i = 0; i < 50; i++) junk2();
+  const r2 = rngFor(777, 'line', 5);
+  const seq2 = [r2(), r2(), r2(), r2(), r2()];
+  const same = seq1.every((v, i) => v === seq2[i]);
+  add('order independence: rngFor(seed,"line",5) unaffected by other calls', same,
+    `seq match=${same} [${seq1.map((v) => v.toFixed(6)).join(', ')}]`);
+}
+// 4a. boundedWalk stays within [min,max] for 10,000 samples.
+{
+  const n = 10000;
+  const w = boundedWalk(4242, n, { mean: 10, sigma: 1, rho: 0.9, min: 0, max: 20 });
+  let lo = Infinity, hi = -Infinity, inside = true;
+  for (const v of w) { if (v < 0 || v > 20) inside = false; if (v < lo) lo = v; if (v > hi) hi = v; }
+  add('boundedWalk: 10,000 samples stay within [min,max]', inside && w.length === n,
+    `n=${w.length} min=${lo.toFixed(3)} max=${hi.toFixed(3)} bounds=[0,20]`);
+}
+// 4b. boundedWalk lag-1 autocorrelation within 0.15 of rho.
+{
+  const rho = 0.9;
+  const w = boundedWalk(4242, 10000, { mean: 10, sigma: 1, rho, min: 0, max: 20 });
+  const m = w.reduce((a, b) => a + b, 0) / w.length;
+  let num = 0, den = 0;
+  for (let i = 1; i < w.length; i++) num += (w[i] - m) * (w[i - 1] - m);
+  for (let i = 0; i < w.length; i++) den += (w[i] - m) * (w[i] - m);
+  const r1 = num / den;
+  add('boundedWalk: lag-1 autocorrelation within 0.15 of rho', Math.abs(r1 - rho) <= 0.15,
+    `rho=${rho} measured r1=${r1.toFixed(4)} |diff|=${Math.abs(r1 - rho).toFixed(4)}`);
+}
+// 4c. boundedWalk mean within 10% of `mean` (non-zero mean so % is defined).
+{
+  const mean = 10;
+  const w = boundedWalk(4242, 10000, { mean, sigma: 1, rho: 0.9, min: 0, max: 20 });
+  const m = w.reduce((a, b) => a + b, 0) / w.length;
+  const rel = Math.abs(m - mean) / Math.abs(mean);
+  add('boundedWalk: sample mean within 10% of mean', rel <= 0.10,
+    `target=${mean} measured=${m.toFixed(4)} relErr=${(rel * 100).toFixed(2)}%`);
+}
+// 5. valueNoise1D continuity: |f(t+0.001) - f(t)| < 0.02 everywhere sampled.
+{
+  const dt = 0.001, limit = 0.02;
+  let worst = 0, worstT = 0, count = 0, outOfRange = 0;
+  // Deterministic sweep: covers lattice points, midpoints, negatives.
+  for (let k = -20000; k < 20000; k++) {
+    const t = k * 0.137;
+    const a = valueNoise1D('noise-seed-7', t, 1);
+    const b = valueNoise1D('noise-seed-7', t + dt, 1);
+    if (a < -1 || a > 1) outOfRange++;
+    const d = Math.abs(b - a);
+    if (d > worst) { worst = d; worstT = t; }
+    count++;
+  }
+  add('valueNoise1D: continuous (|f(t+0.001)-f(t)| < 0.02)', worst < limit && outOfRange === 0,
+    `samples=${count} worst=${worst.toFixed(5)} at t=${worstT.toFixed(3)} rangeViolations=${outOfRange}`);
+}
+// 6. Helpers sanity (not acceptance, guards against regressions).
+{
+  const ok = clamp(5, 0, 1) === 1 && clamp(-2, 0, 1) === 0
+    && Math.abs(lerp(0, 10, 0.25) - 2.5) < 1e-12
+    && smoothstep(0, 1, 0) === 0 && smoothstep(0, 1, 1) === 1
+    && Math.abs(smoothstep(0, 1, 0.5) - 0.5) < 1e-12;
+  add('helpers: clamp/lerp/smoothstep sanity', ok, `ok=${ok}`);
+}
+
+const tbody = document.getElementById('rows');
+let fails = 0;
+for (const r of rows) {
+  const tr = document.createElement('tr');
+  const a = document.createElement('td'); a.textContent = r.name;
+  const b = document.createElement('td'); b.textContent = r.pass ? 'PASS' : 'FAIL';
+  b.className = r.pass ? 'pass' : 'fail';
+  const c = document.createElement('td'); c.textContent = r.measured;
+  tr.append(a, b, c); tbody.appendChild(tr);
+  if (!r.pass) fails++;
+}
+const summary = document.getElementById('summary');
+summary.textContent = fails === 0 ? `ALL TESTS PASS (${rows.length}/${rows.length})` : `${fails} TEST(S) FAIL`;
+summary.className = fails === 0 ? 'pass' : 'fail';
+console.log(summary.textContent);
+for (const r of rows) console.log((r.pass ? 'PASS' : 'FAIL') + ' | ' + r.name + ' | ' + r.measured);
+</script>
+</body>
+</html>

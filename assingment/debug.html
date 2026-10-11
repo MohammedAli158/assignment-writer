@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 1 — glyph size & vertical placement</title>
+<style>
+  body { font-family: Inter, system-ui, sans-serif; background: #0b0d16; color: #e2e8f0; margin: 0; padding: 20px 24px 40px; }
+  h1 { font-size: 1.05rem; }
+  .sub { color: #94a3b8; font-size: .78rem; margin: 4px 0 14px; max-width: 900px; line-height: 1.5; }
+  .bar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; background: rgba(15,17,30,.88); border: 1px solid rgba(148,163,184,.15); border-radius: 12px; padding: 12px 16px; max-width: 960px; }
+  .bar label { font-size: .8rem; color: #cbd5e1; display: flex; gap: 6px; align-items: center; }
+  #stats { font-family: ui-monospace, monospace; font-size: .74rem; color: #a5f3fc; white-space: pre-wrap; background: rgba(0,0,0,.3); border: 1px solid rgba(148,163,184,.15); border-radius: 12px; padding: 12px 16px; margin-top: 14px; max-width: 960px; }
+  #pages { display: flex; flex-direction: column; gap: 22px; margin-top: 16px; }
+  .page-wrap { position: relative; width: min(794px, 100%); }
+  canvas.page, canvas.overlay { display: block; width: 100%; height: auto; }
+  canvas.page { background: #fff; border-radius: 2px; }
+  canvas.overlay { position: absolute; inset: 0; pointer-events: none; }
+  .page-meta { color: #64748b; font-size: .7rem; text-align: center; margin-top: 6px; }
+  pre.spec { font-size: .72rem; color: #94a3b8; background: rgba(0,0,0,.3); padding: 10px 14px; border-radius: 10px; max-width: 960px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Phase 1 — glyph size & vertical placement</h1>
+<div class="sub">
+  Renders a fixed specimen with the <b>Phase 1</b> renderer (same pipeline as
+  <code>index.html</code>, same defaults, same seed <code>483721</code>, same localStorage profile key).
+  Line 1 is the acceptance specimen <code>AaBbGgYy Hello, World. 123</code>.
+  Overlays (sloped with each line): <span style="color:#06b6d4">cyan = baseline</span>,
+  <span style="color:#34d399">green = x-height (0.6)</span>,
+  <span style="color:#c084fc">violet = cap height (1.0)</span>,
+  <span style="color:#f59e0b">amber = descender (-0.4)</span>.
+  The stats panel prints nominal top/bottom/width per glyph plus measured means and PASS/FAIL per acceptance item.
+</div>
+
+<div class="bar">
+  <label><input type="checkbox" id="overlayToggle" checked /> Overlay lines (baseline / x-height / cap / descender)</label>
+  <span id="status" style="font-size:.75rem;color:#94a3b8">Not rendered yet</span>
+</div>
+
+<h3 style="font-size:.75rem;color:#64748b;margin:16px 0 6px">SPECIMEN (fixed, 12 lines)</h3>
+<pre class="spec" id="specimenPre"></pre>
+
+<div id="stats">Stats will appear after render.</div>
+<div id="pages"></div>
+
+<script>
+(() => {
+  'use strict';
+  // ---- Fixed specimen: line 1 is the Phase-1 acceptance line, then the
+  //      Phase-0 12-line body (capitals + lowercase + descenders
+  //      (g j p q y) + digits + punctuation). One line is a heading (#),
+  //      one line contains "Remember", one contains fix/check/important.
+  const SPECIMEN = [
+    'AaBbGgYy Hello, World. 123',
+    '# Field Notes',
+    'The quick brown fox jumps over the lazy dog.',
+    'Pack my box with five dozen liquor jugs!',
+    'Quartz glyphs vex young brazen pigs, 1234567890.',
+    'Remember: small details matter before Friday?',
+    'Check stock updates & fix the queue, Dept. 4.',
+    'Sphinx of black quartz, judge my vow (pack 27!).',
+    'How vexingly quick daft zebras jump, 3-2-1.',
+    'Five boxing wizards jump quickly, pg. 88.',
+    'Jack quietly moved the pyz graft onto boxes.',
+    'Important: config apps use sys flow, w/o delay.',
+    'End of specimen - numbers 0-9, (brackets) & "quotes".'
+  ];
+  document.getElementById('specimenPre').textContent = SPECIMEN.join('\n');
+
+  // ---- Fixed settings = index.html Generate-panel defaults ----
+  const S = {
+    baseline: 0.45, slant: 0.50, spacing: 0.58, size: 0.36,
+    pressure: 0.38, inkThickness: 1.5, rhythm: 0.54, lineTilt: 0.22, lineSpacing: 1.15,
+    lowercase: 0.72, correction: 0.02, shorthand: 0.18,
+    naturalPunct: true, underlineHeads: true, freeMarks: true, warmPaper: true,
+    ink: '#243b63'
+  };
+  const SEED = 483721;
+  const PAGE_W = 794, PAGE_H = 1123;
+  const PROFILE_KEY = 'handwrite.profile.v3';
+  let PROFILE = {};
+  try { PROFILE = JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}'); } catch { PROFILE = {}; }
+
+  const ascenders = new Set(['b','d','f','h','k','l','t']);
+  const descenders = new Set(['g','j','p','q','y']);
+
+  // ---- Renderer below is copied verbatim from index.html (only the
+  //      global `state.profile` is replaced by local PROFILE) ----
+  function rand(seed) {
+    let t = (seed >>> 0) + 0x6D2B79F5;
+    return () => {
+      t += 0x6D2B79F5;
+      let r = Math.imul(t ^ (t >>> 15), 1 | t);
+      r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function gaussian(rng) {
+    let u = 0, v = 0;
+    while (!u) u = rng(); while (!v) v = rng();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  }
+  function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+  function pick(arr, rng){return arr[Math.floor(rng()*arr.length)] || arr[0];}
+
+  function glyphClass(ch){
+    if(/[A-Z]/.test(ch)) return 'upper';
+    if(/[a-z]/.test(ch)) return ascenders.has(ch)?'ascender':descenders.has(ch)?'descender':'lower';
+    if(/[0-9]/.test(ch)) return 'digit';
+    return 'punct';
+  }
+  // Phase 1 extents — kept identical to index.html. Cap units, y-up,
+  // baseline 0. See index.html for the stored-metrics note.
+  function glyphExtent(ch, opts){
+    const lc = (opts && typeof opts.lowercase === 'number') ? opts.lowercase : 0.72;
+    const xS = lc / 0.72;
+    if(/[A-Z]/.test(ch)) return { top: 1.0, bottom: 0, cls: 'upper' };
+    if(/[0-9]/.test(ch)) return { top: 0.95, bottom: 0, cls: 'digit' };
+    switch(ch){
+      case 'b': case 'd': case 'f': case 'h': case 'k': case 'l': return { top: 0.6*xS + 0.50, bottom: 0, cls: 'ascender' };
+      case 't': return { top: 0.6*xS + 0.25, bottom: 0, cls: 'ascender-t' };
+      case 'i': return { top: 0.6*xS + 0.35, bottom: 0, cls: 'x-dot' };
+      case 'g': case 'p': case 'q': case 'y': return { top: 0.6*xS, bottom: -0.4, cls: 'descender' };
+      case 'j': return { top: 0.6*xS + 0.35, bottom: -0.4, cls: 'descender-dot' };
+      case '.': return { top: 0.12, bottom: 0, cls: 'period' };
+      case ',': return { top: 0.08, bottom: -0.20, cls: 'comma' };
+      case "'": case '"': case '’': case '“': case '”': return { top: 1.0, bottom: 0.70, cls: 'quote' };
+      case '-': case '–': case '—': return { top: 0.36, bottom: 0.24, cls: 'hyphen' };
+      case '_': return { top: -0.05, bottom: -0.15, cls: 'underscore' };
+      case '?': case '!': case ':': case ';': return { top: 1.0, bottom: 0, cls: 'tall-punct' };
+      case '(': case ')': case '[': case ']': case '{': case '}': return { top: 1.05, bottom: -0.2, cls: 'bracket' };
+      case '/': return { top: 1.0, bottom: -0.2, cls: 'slash' };
+      default:
+        if(/[a-z]/.test(ch)) return { top: 0.6*xS, bottom: 0, cls: 'lower' };
+        return { top: 0.70, bottom: 0, cls: 'symbol' };
+    }
+  }
+  function resolveProfileSrc(profile, ch, rng){
+    const arr = profile[ch];
+    if(arr && arr.length) return { src: pick(arr, rng), synth: false };
+    if(/[A-Z]/.test(ch)){
+      const lo = profile[ch.toLowerCase()];
+      if(lo && lo.length) return { src: pick(lo, rng), synth: true };
+    }
+    return { src: null, synth: false };
+  }
+  function shorthandWord(w,rng,p){
+    if(rng()>p) return w;
+    const map={and:'&',with:'w/',without:'w/o',system:'sys',organization:'org',organisation:'org',information:'info',document:'doc',documents:'docs',approximately:'approx',before:'b4',between:'btwn',because:'bc',department:'dept',number:'no',numbers:'nos',configuration:'config',application:'app',applications:'apps',people:'ppl',through:'thru',something:'smthg',message:'msg',messages:'msgs',function:'fn',functions:'fns',development:'dev',developmental:'dev'};
+    return map[w.toLowerCase()] ?? w;
+  }
+  function preprocessLine(line,rng,s){
+    const m=line.match(/^(\s*)([-*\u2022]\s+|\d+[.)]\s+)?(.*)$/); if(!m)return line;
+    const prefix=(m[1]||'')+(m[2]||''); let body=m[3]||'';
+    if(s.shorthand) body=body.replace(/\b[A-Za-z]{2,}\b/g,w=>shorthandWord(w,rng,s.shorthand));
+    return prefix+body;
+  }
+  function buildVocabulary(rawLines){
+    const set=new Set();
+    for(const line of rawLines){ const words=line.match(/[A-Za-z']{2,}/g)||[]; for(const w of words) set.add(w); }
+    return [...set];
+  }
+  function buildLineTokens(clean,vocab,errorRate,rng){
+    const parts=clean.split(/(\s+)/).filter(Boolean);
+    const tokens=[];
+    for(const part of parts){
+      if(/^\s+$/.test(part)){ tokens.push({text:part,strike:false}); continue; }
+      if(vocab.length>1 && errorRate>0 && rng()<errorRate){
+        let mistake, tries=0;
+        do{ mistake=pick(vocab,rng); tries++; }while(mistake.toLowerCase()===part.toLowerCase() && tries<5);
+        tokens.push({text:mistake,strike:true});
+        tokens.push({text:' ',strike:false});
+      }
+      tokens.push({text:part,strike:false});
+    }
+    return tokens;
+  }
+  const imgCache=new Map();
+  function loadImage(src){ if(imgCache.has(src)) return imgCache.get(src); const p=new Promise((resolve,reject)=>{const i=new Image();i.onload=()=>resolve(i);i.onerror=reject;i.src=src;});imgCache.set(src,p);return p; }
+
+  const SS = 4;
+  const NEUTRAL_PX = 2.75;
+  const MAX_TRUE_RADIUS = 1.6;
+  function inkSliderToRadiusPx(sliderVal, sliderMin, sliderMax){
+    const span = sliderVal<NEUTRAL_PX ? (NEUTRAL_PX-sliderMin) : (sliderMax-NEUTRAL_PX);
+    if(span<=0) return 0;
+    const t = Math.min(1,Math.abs(sliderVal-NEUTRAL_PX)/span);
+    const mag = t*MAX_TRUE_RADIUS;
+    return sliderVal<NEUTRAL_PX ? -mag : mag;
+  }
+  const inkCache = new Map();
+  function processInk(src, img, truePxRadius){
+    const rSS = Math.round(truePxRadius*SS);
+    if(rSS===0) return img;
+    const key = src+'|'+rSS;
+    if(inkCache.has(key)) return inkCache.get(key);
+    const nw=img.naturalWidth||img.width, nh=img.naturalHeight||img.height;
+    const w=nw*SS, h=nh*SS;
+    const up=document.createElement('canvas'); up.width=w; up.height=h;
+    const uctx=up.getContext('2d'); uctx.imageSmoothingEnabled=true; uctx.imageSmoothingQuality='high'; uctx.drawImage(img,0,0,w,h);
+    const id=uctx.getImageData(0,0,w,h); const px=id.data;
+    const n=w*h; const alpha=new Uint8ClampedArray(n);
+    for(let i=0,p=3;i<n;i++,p+=4) alpha[i]=px[p];
+    const thinning = rSS<0; const r=Math.min(Math.abs(rSS), Math.floor(Math.min(w,h)/3));
+    const tmp=new Uint8ClampedArray(n);
+    for(let y=0;y<h;y++){ const row=y*w;
+      for(let x=0;x<w;x++){
+        let v = thinning?255:0;
+        const lo=Math.max(0,x-r), hi=Math.min(w-1,x+r);
+        for(let xx=lo;xx<=hi;xx++){ const av=alpha[row+xx]; v = thinning?Math.min(v,av):Math.max(v,av); }
+        tmp[row+x]=v;
+      }
+    }
+    const out=new Uint8ClampedArray(n);
+    for(let x=0;x<w;x++){
+      for(let y=0;y<h;y++){
+        let v = thinning?255:0;
+        const lo=Math.max(0,y-r), hi=Math.min(h-1,y+r);
+        for(let yy=lo;yy<=hi;yy++){ const av=tmp[yy*w+x]; v = thinning?Math.min(v,av):Math.max(v,av); }
+        out[y*w+x]=v;
+      }
+    }
+    for(let i=0,p=3;i<n;i++,p+=4) px[p]=out[i];
+    uctx.putImageData(id,0,0);
+    const down=document.createElement('canvas'); down.width=nw; down.height=nh;
+    const dctx=down.getContext('2d'); dctx.imageSmoothingEnabled=true; dctx.imageSmoothingQuality='high'; dctx.drawImage(up,0,0,nw,nh);
+    inkCache.set(key,down);
+    return down;
+  }
+
+  function drawPaper(c,w,h,rng,warm){
+    const x=c.getContext('2d'); x.fillStyle='#fcfbf7';x.fillRect(0,0,w,h);
+    if(warm){
+      const g=x.createRadialGradient(w*.45,h*.4,50,w*.45,h*.4,Math.max(w,h)*.75);g.addColorStop(0,'rgba(255,255,255,.2)');g.addColorStop(1,'rgba(150,120,80,.035)');x.fillStyle=g;x.fillRect(0,0,w,h);
+      x.globalAlpha=.035; for(let i=0;i<3000;i++){x.fillStyle=rng()>.5?'#6b5b47':'#fff';x.fillRect(rng()*w,rng()*h,1,1);} x.globalAlpha=1;
+    }
+  }
+  function roughLine(c,x1,y1,x2,y2,rng,width=1.3,alpha=.7){const x=c.getContext('2d');x.save();x.strokeStyle=`rgba(36,59,99,${alpha})`;x.lineWidth=width;x.lineCap='round';x.beginPath();const n=10;x.moveTo(x1,y1);for(let i=1;i<=n;i++){const t=i/n;const x0=x1+(x2-x1)*t+(rng()-.5)*1.4;const y0=y1+(y2-y1)*t+(rng()-.5)*2.4;x.lineTo(x0,y0);}x.stroke();x.restore();}
+  function fallbackText(c, text, x, baseline, h, angle, scaleX, color){
+    const q=c.getContext('2d');q.save();q.translate(x,baseline);q.rotate(angle);q.scale(scaleX,1);q.fillStyle=color;q.font=`italic ${Math.max(14,h)}px "Segoe Print", "Comic Sans MS", cursive`;q.textBaseline='alphabetic';q.fillText(text,0,0);const m=q.measureText(text).width;q.restore();return m*scaleX;
+  }
+  // stats counters (harness-only, do not affect pixels)
+  const counters = { glyphs: 0, fallback: 0, strikes: 0 };
+  // Per-glyph Phase-1 measurements: nominal box + actually drawn top/bottom
+  // (cap units, relative to the line's nominal baseline) + width + synth flag.
+  const measureLog = [];
+  const synthChars = new Set();
+  function drawGlyph(c,ch,x,baseline,capHeight,wordSlant,opts,rng){
+    if(ch===' '){ const adv=Math.max(5, capHeight*0.32*(.88 + opts.spacing*.08)); return adv; }
+    const e=glyphExtent(ch,opts);
+    const boxH=e.top-e.bottom;
+    const k=1+clamp(opts.size*gaussian(rng)*.032,-.3,.3);
+    const drawH=boxH*capHeight*k;
+    const topOff=e.top*capHeight*k;
+    const angle=wordSlant + gaussian(rng)*opts.slant*.020;
+    const microY=gaussian(rng)*opts.baseline*0.022*capHeight;
+    let img=null;
+    img=opts.image;
+    if(opts.synth) synthChars.add(ch);
+    if(!img){
+      counters.fallback++;
+      const scaleX=clamp(1+gaussian(rng)*.02,.85,1.15);
+      const microCap=microY/capHeight;
+      measureLog.push({ ch, cls: e.cls + '(fallback)', top: NaN, bottom: NaN, widthCap: NaN, synth: false, fb: true });
+      const measured=fallbackText(c,ch,x,baseline+microY,capHeight*k,angle,scaleX,opts.ink); return measured;
+    }
+    counters.glyphs++;
+    const ratio=img.width/Math.max(1,img.height); const w=drawH*ratio;
+    const microCap=microY/capHeight;
+    measureLog.push({ ch, cls: e.cls, top: e.top*k - microCap, bottom: e.bottom*k - microCap, widthCap: (drawH*ratio)/capHeight, synth: !!opts.synth, fb: false });
+    const sx=clamp(1+gaussian(rng)*opts.size*.028,.65,1.35); const sy=clamp(1+gaussian(rng)*opts.size*.018,.72,1.28);
+    const alpha=clamp(.80 + gaussian(rng)*.045*opts.pressure,.58,.98);
+    const inkPool=opts.pressure*.32;
+    const q=c.getContext('2d');q.save();q.globalAlpha=alpha;q.translate(x+w*.04,baseline+microY);q.rotate(angle);q.scale(sx,sy);
+    q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);
+    if(inkPool>.1 && rng()<.35){q.globalAlpha=inkPool*.22;q.translate((rng()-.5)*.8,(rng()-.5)*.8);q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);}
+    q.restore();
+    const advance=w*(.88 + opts.spacing*.08 + gaussian(rng)*opts.spacing*.035);
+    return Math.max(5,advance);
+  }
+
+  // Same as index.html renderPage, plus records per-line geometry for overlays.
+  function renderPage(lines, pageIndex, totalPages, s, seed, glyphImages, vocab){
+    const c=document.createElement('canvas');c.width=PAGE_W;c.height=PAGE_H;const rng=rand(seed + pageIndex*10007);drawPaper(c,PAGE_W,PAGE_H,rng,s.warmPaper);const q=c.getContext('2d');
+    const marginX=72, top=82, right=PAGE_W-72;let y=top;const baseH=42;const lineH=baseH*s.lineSpacing;
+    const geom = [];
+    const pageDriftSign=rng()<.5?-1:1;
+    for(let li=0;li<lines.length;li++){
+      const raw=lines[li]; const line=preprocessLine(raw,rng,s.shorthand);
+      const heading=/^\s*#\s+/.test(line); const clean=line.replace(/^\s*#\s+/,'');
+      if(!clean.trim()){y+=lineH*.72;continue;}
+      const lineMarginX=marginX + gaussian(rng)*2.2;
+      const lineSign=rng()<.82 ? pageDriftSign : -pageDriftSign;
+      const lineSlope=lineSign * s.lineTilt * (.4+rng()*.9) * .07;
+      let baseline=y + gaussian(rng)*s.baseline*1.1;
+      let x=lineMarginX;
+      const tokens=buildLineTokens(clean,vocab,s.correction,rng);
+      for(let ti=0;ti<tokens.length;ti++){
+        const tok=tokens[ti]; if(!tok.text)continue;
+        if(/^\s+$/.test(tok.text)){x += Math.max(5, 9 + gaussian(rng)*s.spacing*3.1 + (rng()-.5)*s.rhythm*3.3);continue;}
+        const wordSlant=(rng()-.5)*s.slant*.06;
+        const wordStart=x; const wordBaseline=baseline + (x-lineMarginX)*lineSlope;
+        for(const ch of tok.text){
+          const localBaseline=baseline + (x-lineMarginX)*lineSlope;
+          const res=resolveProfileSrc(PROFILE,ch,rng); const image=res.src ? glyphImages.get(res.src) : null;
+          const renderedWidth=drawGlyph(c,ch,x,localBaseline,baseH,wordSlant,{...s,image,synth:res.synth},rng); x+=renderedWidth||0;
+        }
+        if(tok.strike){ counters.strikes++; roughLine(c,wordStart-2,wordBaseline-baseH*.33,x+2,wordBaseline-baseH*.38,rng,1.1,.55); }
+      }
+      if(s.underlineHeads && heading){roughLine(c,lineMarginX,y+8,clamp(x,lineMarginX+30,right),y+6,rng,1.2,.62);}
+      if(s.freeMarks && /\bremember\b/i.test(clean) && rng()<.6){const tx=Math.min(right-45,x+8);roughLine(c,tx,y-14,tx+34,y-31,rng,1.2,.6);roughLine(c,tx+34,y-31,tx+27,y-29,rng,1.2,.6);roughLine(c,tx+34,y-31,tx+32,y-24,rng,1.2,.6);}
+      if(s.freeMarks && /\bfix\b|\bcheck\b|\bimportant\b/i.test(clean) && rng()<.35){const bx=lineMarginX-9,by=y-baseH*.88,bw=Math.min(x-lineMarginX+18,right-lineMarginX);q.save();q.strokeStyle='rgba(36,59,99,.58)';q.lineWidth=1.1;q.beginPath();q.moveTo(bx,by+(rng()-.5)*2);q.lineTo(bx+bw,by+(rng()-.5)*2);q.lineTo(bx+bw+1,by+baseH+(rng()-.5)*2);q.lineTo(bx,by+baseH+(rng()-.5)*2);q.closePath();q.stroke();q.restore();}
+      geom.push({ y, baseline, lineMarginX, xEnd: Math.min(x, right), slope: lineSlope, baseH, xS: S.lowercase / 0.72 });
+      y += lineH + gaussian(rng)*s.baseline*1.3 + (rng()-.5)*lineH*.1;
+      if(y>PAGE_H-90)break;
+    }
+    if(rng()<.55){for(let i=0;i<9;i++) roughLine(c,54,95+i*(PAGE_H-150)/8,58,95+i*(PAGE_H-150)/8,rng,.45,.16);}
+    return { canvas: c, geom };
+  }
+  // ---- end of verbatim renderer copy ----
+
+  // Phase 1 overlays: baseline / x-height / cap-height / descender lines,
+  // each sloped with its own line. Canvas y grows down, so a cap-unit height
+  // h above the baseline is baseline - h*baseH in pixels.
+  function drawOverlays(ov, geom) {
+    const x = ov.getContext('2d');
+    x.clearRect(0, 0, PAGE_W, PAGE_H);
+    const guides = [
+      { h: 0,    color: 'rgba(6,182,212,.9)',  width: 1.4 }, // baseline
+      { h: null, color: 'rgba(52,211,153,.9)', width: 1.1 }, // x-height = 0.6*xS
+      { h: 1.0,  color: 'rgba(192,132,252,.9)', width: 1.1 }, // cap height
+      { h: -0.4, color: 'rgba(245,158,11,.9)', width: 1.1 }, // descender
+    ];
+    for (const g of geom) {
+      const xH = 0.6 * (g.xS || 1);
+      for (const gd of guides) {
+        const h = gd.h === null ? xH : gd.h;
+        x.strokeStyle = gd.color; x.lineWidth = gd.width;
+        x.beginPath();
+        x.moveTo(g.lineMarginX - 6, g.baseline - h * g.baseH);
+        x.lineTo(g.xEnd + 6, (g.baseline - h * g.baseH) + (g.xEnd + 6 - (g.lineMarginX - 6)) * g.slope);
+        x.stroke();
+      }
+    }
+  }
+
+  async function renderAll() {
+    const t0 = performance.now();
+    counters.glyphs = 0; counters.fallback = 0; counters.strikes = 0;
+    measureLog.length = 0; synthChars.clear();
+    const vocab = buildVocabulary(SPECIMEN);
+    document.getElementById('status').textContent = 'Preparing glyphs…';
+    const needed = new Set();
+    for (const line of SPECIMEN) for (const ch of line) {
+      const arr = PROFILE[ch]; if (arr?.length) arr.forEach((src) => needed.add(src));
+    }
+    const rawGlyphImages = new Map();
+    await Promise.all([...needed].map(async (src) => { try { rawGlyphImages.set(src, await loadImage(src)); } catch {} }));
+    const inkRadiusPx = inkSliderToRadiusPx(S.inkThickness, 0.5, 5);
+    const glyphImages = new Map();
+    for (const [src, img] of rawGlyphImages) glyphImages.set(src, processInk(src, img, inkRadiusPx));
+
+    const pagesEl = document.getElementById('pages');
+    pagesEl.innerHTML = '';
+    // Same paging rule as index.html: split every 23 lines (specimen fits one page).
+    const chunks = []; let chunk = [];
+    for (const l of SPECIMEN) { chunk.push(l); if (chunk.length >= 23) { chunks.push(chunk); chunk = []; } }
+    if (chunk.length || !chunks.length) chunks.push(chunk);
+
+    const overlays = [];
+    chunks.forEach((ch, i) => {
+      const { canvas: c, geom } = renderPage(ch, i, chunks.length, S, SEED, glyphImages, vocab);
+      const wrap = document.createElement('div'); wrap.className = 'page-wrap';
+      const cv = document.createElement('canvas'); cv.className = 'page';
+      cv.width = PAGE_W; cv.height = PAGE_H;
+      cv.getContext('2d').drawImage(c, 0, 0);
+      const ov = document.createElement('canvas'); ov.className = 'overlay';
+      ov.width = PAGE_W; ov.height = PAGE_H;
+      drawOverlays(ov, geom);
+      overlays.push(ov);
+      wrap.append(cv, ov);
+      const meta = document.createElement('div'); meta.className = 'page-meta';
+      meta.textContent = `Page ${i + 1} / ${chunks.length}`;
+      wrap.appendChild(meta);
+      pagesEl.appendChild(wrap);
+    });
+
+    const ms = performance.now() - t0;
+    const words = SPECIMEN.join(' ').split(/\s+/).filter(Boolean).length;
+    const chars = SPECIMEN.join('\n').length;
+    const profileKeys = Object.keys(PROFILE).length;
+
+    // ---- Phase 1 acceptance numbers (nominal boxes are deterministic) ----
+    const ACC = 'AaBbGgYy Hello, World. 123';
+    const seen = [...new Set([...ACC].filter((ch) => ch !== ' '))];
+    const agg = new Map(); // ch -> {n, topSum, botSum, wSum, synth, fb}
+    for (const m of measureLog) {
+      if (!seen.includes(m.ch)) continue;
+      let a = agg.get(m.ch);
+      if (!a) { a = { n: 0, topSum: 0, botSum: 0, wSum: 0, wn: 0, synth: false, fb: false }; agg.set(m.ch, a); }
+      a.n++;
+      if (m.fb) { a.fb = true; continue; }
+      a.topSum += m.top; a.botSum += m.bottom;
+      if (Number.isFinite(m.widthCap)) { a.wSum += m.widthCap; a.wn++; }
+      if (m.synth) a.synth = true;
+    }
+    const xS = S.lowercase / 0.72;
+    const nom = (ch) => glyphExtent(ch, S);
+    const fmt = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : 'n/a(fallback)');
+    const lines = [];
+    lines.push(`seed=${SEED} pages=${chunks.length} lines=${SPECIMEN.length} words=${words} chars=${chars}`);
+    lines.push(`profile glyphs: ${profileKeys} chars with captures | drawn from profile=${counters.glyphs} fallback=${counters.fallback} strikes=${counters.strikes} | synthesized capitals: ${[...synthChars].join(' ') || 'none'}`);
+    lines.push(`settings: ${JSON.stringify(S)}`);
+    lines.push(`render time: ${ms.toFixed(1)} ms (inkRadiusPx=${inkRadiusPx.toFixed(2)})`);
+    lines.push('');
+    lines.push('per-glyph boxes (cap units, y-up, baseline 0) for the acceptance line:');
+    lines.push('ch  class         nominalTop nominalBot measTop measBot widthCap synth');
+    for (const ch of seen) {
+      const e = nom(ch);
+      const a = agg.get(ch);
+      const rows = measureLog.filter((m) => m.ch === ch && !m.fb);
+      const mt = rows.length ? rows.reduce((s, m) => s + m.top, 0) / rows.length : NaN;
+      const bmt = rows.length ? rows.reduce((s, m) => s + m.bottom, 0) / rows.length : NaN;
+      const mw = a && a.wn ? a.wSum / a.wn : NaN;
+      const syn = a && a.synth ? 'SYNTH' : ((a && a.fb && !a.wn) ? 'fallback-font' : ((PROFILE[ch]?.length ? 'no' : ((/[A-Z]/.test(ch) && PROFILE[ch.toLowerCase()]?.length) ? 'SYNTH' : 'fallback-font'))));
+      lines.push(`${ch}   ${(e.cls + '            ').slice(0, 13)} ${fmt(e.top)}      ${fmt(e.bottom)}      ${fmt(mt)}   ${fmt(bmt)}   ${fmt(mw)}   ${syn}`);
+    }
+    lines.push('');
+    const ck = [];
+    const close = (v, t, tol) => Math.abs(v - t) <= tol;
+    const eA = nom('A'), ea = nom('a'), eg = nom('g'), ey = nom('y'), eP = nom('.'), eC = nom(',');
+    ck.push(`A top within 3% of cap line (1.00): ${fmt(eA.top)} diff=${fmt(Math.abs(eA.top - 1.0))} -> ${close(eA.top, 1.0, 0.03) ? 'PASS' : 'FAIL'}`);
+    ck.push(`B top within 3% of cap line (1.00): ${fmt(nom('B').top)} diff=${fmt(Math.abs(nom('B').top - 1.0))} -> ${close(nom('B').top, 1.0, 0.03) ? 'PASS' : 'FAIL'}`);
+    ck.push(`a top within 5% of x-height (0.60): ${fmt(ea.top)} diff=${fmt(Math.abs(ea.top - 0.6 * xS))} -> ${close(ea.top, 0.6 * xS, 0.03) ? 'PASS' : 'FAIL'}`);
+    ck.push(`g tail 0.35-0.45 below baseline: ${fmt(-eg.bottom)} -> ${(-eg.bottom >= 0.35 && -eg.bottom <= 0.45) ? 'PASS' : 'FAIL'}`);
+    ck.push(`y tail 0.35-0.45 below baseline: ${fmt(-ey.bottom)} -> ${(-ey.bottom >= 0.35 && -ey.bottom <= 0.45) ? 'PASS' : 'FAIL'}`);
+    const ratio = (eA.top - eA.bottom) / (ea.top - ea.bottom);
+    ck.push(`A height ${(eA.top - eA.bottom).toFixed(2)} vs a height ${(ea.top - ea.bottom).toFixed(2)} ratio=${ratio.toFixed(2)} (~1.6x) -> ${(ratio >= 1.5 && ratio <= 1.8) ? 'PASS' : 'FAIL'}`);
+    ck.push(`period small on baseline (0 to 0.12): top=${fmt(eP.top)} bot=${fmt(eP.bottom)} -> ${(eP.bottom === 0 && eP.top <= 0.15) ? 'PASS' : 'FAIL'}`);
+    ck.push(`comma hangs below baseline (bot<0): bot=${fmt(eC.bottom)} -> ${eC.bottom < -0.05 ? 'PASS' : 'FAIL'}`);
+    lines.push(...ck);
+    lines.push('');
+    lines.push('note: nominal boxes are exact by construction; measTop/measBot include seeded size+baseline jitter (std ~1%) so they wobble slightly around nominal.');
+    lines.push('note: handwriting_font.json carries strokes only (all variants normalized ~0-1, no size info) and the PNG profile carries raster only -> heights from the class table, widths from each image w/h.');
+    document.getElementById('stats').textContent = lines.join('\n');
+    document.getElementById('status').textContent = `${chunks.length} page(s) rendered in ${ms.toFixed(0)} ms`;
+
+    const toggle = document.getElementById('overlayToggle');
+    const apply = () => overlays.forEach((ov) => { ov.style.display = toggle.checked ? 'block' : 'none'; });
+    toggle.onchange = apply; apply();
+  }
+
+  renderAll().catch((e) => { document.getElementById('status').textContent = 'Render failed: ' + e.message; });
+})();
+</script>
+</body>
+</html>
