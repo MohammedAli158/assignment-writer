@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handwrite — Cursive samples (Phase 3)</title>
+<style>
+  :root{--bg:#0b0d16;--card:#141827;--line:rgba(148,163,184,.16);--text:#eef2f8;--muted:#9aa7bd;--accent:#7c3aed}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:22px;line-height:1.45}
+  h1{font-size:1.25rem;letter-spacing:-.02em;margin-bottom:2px}
+  .sub{color:var(--muted);font-size:.78rem;margin-bottom:18px}
+  .sub b{color:#c7d2fe}
+  .wrap{display:grid;grid-template-columns:1fr 320px;gap:18px;max-width:1280px;margin:auto;align-items:start}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .side{display:flex;flex-direction:column;gap:14px}
+  canvas{width:100%;height:auto;border-radius:10px;touch-action:none;cursor:crosshair;display:block}
+  label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin-bottom:6px}
+  input{width:100%;background:#0d1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit}
+  .char{text-align:center;font-size:1.3rem;font-weight:800}
+  button{cursor:pointer;border:0;border-radius:9px;padding:9px 13px;font:inherit;font-weight:700;color:#fff;background:#2a3350}
+  button.primary{background:linear-gradient(135deg,#6366f1,#7c3aed)}
+  button.bad{background:rgba(239,68,68,.16);color:#fca5a5}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .stats{font-size:.8rem;color:var(--muted)}
+  .stats b{color:var(--text)}
+  .prompt{font-size:1.05rem;font-weight:800;margin:4px 0}
+  .kinds{font-size:.72rem}
+  .g{color:#9fe6c6}.s{color:#7fb0e0}.m{color:#f5a3a3}
+  .palette{display:grid;grid-template-columns:repeat(9,1fr);gap:4px;margin-top:6px}
+  .p{aspect-ratio:1;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--muted);font-weight:700;padding:0;font-size:.85rem;line-height:1.1}
+  .p:hover{color:#fff}
+  .p.sel{border-color:var(--accent);color:#fff;background:rgba(124,58,237,.22)}
+  .p small{display:block;font-size:.55rem;color:var(--muted);font-weight:400}
+  .p.done{color:#9fe6c6}
+  .msg{font-size:.76rem;color:#9fe6c6;min-height:1.1em}
+  .warn{color:#f5c07a}
+  .help{font-size:.72rem;color:var(--muted)}
+  a.link{color:#a5b4fc;font-size:.78rem}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Capture cursive samples</h1>
+    <div class="sub">Write each letter in <b>your natural cursive</b> with its connecting entry/exit flicks, as if it stood alone in a word. On save, the cursive filter extracts the extra strokes automatically: <span class="g">prefix</span> (entry), <span class="s">suffix</span> (exit), <span class="m">misc</span> (extra body ink such as a loop).</div>
+    <div class="prompt" id="prompt"></div>
+    <canvas id="cap" width="1000" height="360"></canvas>
+    <div class="row" style="margin-top:12px">
+      <button id="undo">Undo stroke</button>
+      <button id="clear" class="bad">Clear</button>
+      <button id="save" class="primary">Save cursive sample</button>
+    </div>
+    <div class="msg" id="status">Ready.</div>
+    <canvas id="preview" width="1000" height="360" style="margin-top:10px"></canvas>
+    <div class="help" id="previewHelp">Preview: grey = your ink; <span class="g">green</span>/<span class="s">blue</span>/<span class="m">red</span> = extracted prefix/suffix/misc. Nothing here yet.</div>
+  </div>
+
+  <div class="side">
+    <div class="card">
+      <label for="charInput">Letter to capture</label>
+      <input id="charInput" class="char" maxlength="1" autocomplete="off">
+      <div class="stats" id="charStats"></div>
+      <label style="margin-top:12px">Prompted letters (word list: the quick brown fox…)</label>
+      <div class="palette" id="palette"></div>
+    </div>
+
+    <div class="card">
+      <label>Cursive store</label>
+      <div class="stats" id="storeStats"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="importBtn">Import JSON</button>
+        <button id="exportBtn">Export profile</button>
+      </div>
+      <input id="importInput" type="file" accept="application/json" hidden>
+      <div class="help" style="margin-top:8px">Export saves your whole profile (print glyphs + cursive) as <b>default-profile.json</b> — this becomes the app default. Imports can be a full profile or a cursive-only file; samples merge, nothing is overwritten.</div>
+    </div>
+
+    <div class="card">
+      <label>Elsewhere</label>
+      <div class="help">
+        <a class="link" href="index.html">← Capture print glyphs</a><br>
+        <a class="link" href="render.html">Render pages →</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createCapture } from './src/capture.js';
+import { createStore, deserialize } from './src/glyphstore.js';
+import { loadStore, saveStore } from './src/persist.js';
+import { cursiveLetters, contextWords } from './src/cursive/wordlist.js';
+import {
+  addCursiveSample, addExtras, cursiveSampleCount, extrasOf,
+  coverage, initCursive, mergeCursive,
+} from './src/cursive/store.js';
+import { extractExtras } from './src/cursive/extract.js';
+
+const $ = (sel) => document.querySelector(sel);
+const LETTERS = cursiveLetters();
+const store = loadStore() || createStore();
+initCursive(store);
+
+const cap = createCapture($('#cap'), { sideBearing: store.metrics.sideBearing });
+let currentChar = LETTERS[0];
+$('#charInput').value = currentChar;
+
+function setStatus(text, warn) {
+  const el = $('#status');
+  el.textContent = text;
+  el.className = 'msg' + (warn ? ' warn' : '');
+}
+
+// Draw a sample grey with its extracted extras coloured by kind. Both live in
+// the same cap-unit frame, so no re-anchoring is needed here.
+function showPreview(sample, extras) {
+  const ctx = $('#preview').getContext('2d');
+  const w = $('#preview').width;
+  const h = $('#preview').height;
+  const scale = 120;
+  const baseline = h - 100;
+  const at = (x, y) => [60 + x * scale, baseline - y * scale];
+  ctx.fillStyle = '#fbfcfd';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = 'rgba(148,163,184,.25)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 6]);
+  for (const y of [0, store.metrics.xHeight, store.metrics.ascender, -Math.abs(store.metrics.descender)]) {
+    ctx.beginPath();
+    ctx.moveTo(0, baseline - y * scale);
+    ctx.lineTo(w, baseline - y * scale);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const draw = (pts, color) => {
+    if (!pts || pts.length < 2) return;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    let p = at(pts[0].x, pts[0].y);
+    ctx.moveTo(p[0], p[1]);
+    for (let i = 1; i < pts.length; i++) {
+      p = at(pts[i].x, pts[i].y);
+      ctx.lineTo(p[0], p[1]);
+    }
+    ctx.stroke();
+  };
+  for (const stroke of sample.strokes) draw(stroke, '#c8cdd8');
+  const colors = { prefix: '#9fe6c6', suffix: '#7fb0e0', misc: '#f5a3a3' };
+  for (const e of extras) {
+    draw(e.rel.map((p) => ({ x: p.x + e.attach.x, y: p.y + e.attach.y })), colors[e.kind]);
+  }
+  $('#previewHelp').innerHTML = `Preview of the last saved sample. <span class="g">green</span>/<span class="s">blue</span>/<span class="m">red</span> = prefix/suffix/misc.`;
+}
+
+function refresh() {
+  let total = 0;
+  for (const c of LETTERS) total += cursiveSampleCount(store, c);
+  $('#storeStats').innerHTML =
+    `Letters with samples: <b>${LETTERS.filter((c) => cursiveSampleCount(store, c) > 0).length}</b> / ${LETTERS.length} &nbsp; Samples: <b>${total}</b>`;
+  const e = extrasOf(store, currentChar);
+  $('#charStats').innerHTML =
+    `"${currentChar}": <b>${cursiveSampleCount(store, currentChar)}</b> sample(s) · ` +
+    `<span class="g">${e.prefix.length} prefix</span> · <span class="s">${e.suffix.length} suffix</span> · <span class="m">${e.misc.length} misc</span>`;
+
+  const palette = $('#palette');
+  palette.textContent = '';
+  for (const cov of coverage(store, LETTERS)) {
+    const b = document.createElement('button');
+    b.className = 'p' + (cov.ch === currentChar ? ' sel' : '') + (cov.samples > 0 ? ' done' : '');
+    b.innerHTML = `${cov.ch}<small>${cov.samples}·${cov.prefix}/${cov.suffix}/${cov.misc}</small>`;
+    b.onclick = () => { currentChar = cov.ch; $('#charInput').value = cov.ch; cap.setChar(); refresh(); };
+    palette.appendChild(b);
+  }
+
+  $('#prompt').textContent =
+    `Write cursive '${currentChar}' — as in ${contextWords(currentChar).map((w) => `'${w}'`).join(', ')}`;
+  saveStore(store);
+}
+
+$('#save').onclick = () => {
+  const ch = $('#charInput').value.trim();
+  if (ch.length !== 1) { setStatus('Type exactly one letter.', true); return; }
+  const variants = store.glyphs[ch];
+  if (!variants || !variants.length) {
+    setStatus(`No print glyph for "${ch}" in the store — capture it in index.html first (or load the legacy font there).`, true);
+    return;
+  }
+  const sample = cap.save();
+  if (!sample) { setStatus('Write the cursive form first.', true); return; }
+  const idx = addCursiveSample(store, ch, sample);
+  const extras = extractExtras(variants, sample).map((e2) => ({ ...e2, from: idx - 1 }));
+  addExtras(store, ch, extras);
+  const n = { prefix: 0, suffix: 0, misc: 0 };
+  for (const e2 of extras) n[e2.kind]++;
+  showPreview(sample, extras);
+  refresh();
+  setStatus(`Saved sample #${idx} for "${ch}": ${n.prefix} prefix, ${n.suffix} suffix, ${n.misc} misc stroke(s) extracted.`);
+};
+
+$('#undo').onclick = () => cap.undo();
+$('#clear').onclick = () => cap.clear();
+
+$('#charInput').oninput = (e) => {
+  const v = e.target.value;
+  if (v) {
+    currentChar = v[0].toLowerCase();
+    $('#charInput').value = currentChar;
+    cap.setChar();
+    refresh();
+  }
+};
+
+$('#importBtn').onclick = () => $('#importInput').click();
+$('#importInput').onchange = async (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  try {
+    const obj = JSON.parse(await file.text());
+    if (obj.glyphs) {
+      mergeCursive(store, deserialize(JSON.stringify(obj)));
+      setStatus('Imported a full profile — cursive samples merged onto this store.');
+    } else if (obj.cursive) {
+      mergeCursive(store, obj); // a cursive-only profile carries just .cursive
+      setStatus('Imported a cursive-only profile — samples merged.');
+    } else {
+      setStatus('Not a profile this page understands: expected glyphs and/or a "cursive" section.', true);
+    }
+  } catch (e) {
+    setStatus('Import failed: ' + e.message, true);
+  }
+  refresh();
+};
+
+$('#exportBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify(store)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'default-profile.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  setStatus('Exported default-profile.json — this file becomes the app default.');
+};
+
+refresh();
+</script>
+</body>
+</html>

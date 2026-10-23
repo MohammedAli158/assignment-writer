@@ -1,0 +1,9 @@
+{
+  "name": "handwrite-app",
+  "private": true,
+  "type": "module",
+  "description": "Prerequisite phase: capture canvas + glyph store. Run: node server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}

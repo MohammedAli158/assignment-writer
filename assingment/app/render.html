@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handwrite — Render (Phase 1)</title>
+<style>
+  :root{--bg:#0b0d16;--card:#141827;--line:rgba(148,163,184,.16);--text:#eef2f8;--muted:#9aa7bd;--accent:#7c3aed}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:22px;line-height:1.45}
+  h1{font-size:1.25rem;letter-spacing:-.02em;margin-bottom:2px}
+  .sub{color:var(--muted);font-size:.78rem;margin-bottom:18px}
+  .wrap{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:18px;max-width:1280px;margin:auto;align-items:start}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin-bottom:6px}
+  textarea,input{width:100%;background:#0d1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit}
+  textarea{min-height:200px;resize:vertical}
+  button{cursor:pointer;border:0;border-radius:9px;padding:10px 14px;font:inherit;font-weight:700;color:#fff;background:#2a3350}
+  button.primary{background:linear-gradient(135deg,#6366f1,#7c3aed)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:flex-end;margin-top:12px}
+  .row > div{flex:1}
+  .row .small{flex:0 0 120px}
+  .stats{font-size:.8rem;color:var(--muted);margin-top:10px}
+  .stats b{color:var(--text)}
+  .warn{color:#f5c07a;font-size:.78rem;min-height:1.1em}
+  .pages{display:flex;flex-direction:column;align-items:center;gap:16px;max-height:calc(100vh - 80px);overflow:auto;padding:6px}
+  .page{display:block;width:100%;max-width:794px;height:auto;background:#fff;box-shadow:0 6px 24px rgba(0,0,0,.35);border-radius:2px}
+  a.link{color:#a5b4fc;font-size:.78rem}
+  .quad{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  #toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);background:#3b1d1d;border:1px solid #b45454;color:#ffd9d9;
+    padding:11px 16px;border-radius:10px;font-size:.85rem;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:.18s;z-index:50}
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+  @media(max-width:960px){.wrap{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Render handwriting</h1>
+    <div class="sub">Phase 2: letters placed left to right by advance width, with bounded and correlated variation of the word gaps and line gaps. Only the variant choice per letter and the gap sizes are random (seeded).</div>
+    <label for="text">Text</label>
+    <textarea id="text">Handwriting should keep every letter's real size.
+
+Jackdaws love my big sphinx of quartz. The five boxing wizards jump quickly.
+
+gjpqy hang below the baseline; AaBb 0123 sit on it.</textarea>
+    <div class="row">
+      <div class="small"><label for="seed">Seed</label><input id="seed" type="number" value="483721"></div>
+      <div style="flex:0 0 70px"><label for="ink">Ink</label><input id="ink" type="color" value="#243b63"></div>
+      <div><button id="render" class="primary">Render</button></div>
+      <div style="flex:0 0 auto"><button id="pdf" disabled>Export PDF</button></div>
+    </div>
+
+    <div class="quad">
+      <div><label for="wordMin">Word gap min</label><input id="wordMin" type="number" step="0.05" min="0"></div>
+      <div><label for="wordMax">Word gap max</label><input id="wordMax" type="number" step="0.05" min="0"></div>
+      <div><label for="lineMin">Line gap min</label><input id="lineMin" type="number" step="0.05" min="0"></div>
+      <div><label for="lineMax">Line gap max</label><input id="lineMax" type="number" step="0.05" min="0"></div>
+    </div>
+    <div class="quad" style="margin-top:10px">
+      <div style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="cursiveOn" style="width:auto"><label for="cursiveOn" style="margin:0">Cursive joins</label></div>
+      <div><label for="cursiveAmt">Cursiveness (%)</label><input id="cursiveAmt" type="range" min="0" max="100" step="5" style="padding:0;background:transparent;border:0"></div>
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="warn" id="warn"></div>
+    <div class="sub" style="margin-top:12px"><a class="link" href="index.html">← Capture more handwriting</a></div>
+  </div>
+
+  <div class="card">
+    <div class="pages" id="preview"><div class="sub">Rendered pages appear here.</div></div>
+  </div>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script type="module">
+import { glyphCount, totalSamples } from './src/glyphstore.js';
+import { loadLegacyJson } from './src/loaders/legacyJson.js';
+import { layoutDocument, PAGE, SPACING } from './src/layout.js';
+import { CURSIVE_DEFAULTS } from './src/cursive/choose.js';
+import { drawPage } from './src/draw.js';
+import { pagesToPdf, A4_PT } from './src/pdf.js';
+import { loadStore } from './src/persist.js';
+import { fallbackReport } from './src/fallback.js';
+import { initCursive } from './src/cursive/store.js';
+
+const $ = (sel) => document.querySelector(sel);
+const preview = $('#preview');
+let store = loadStore();
+let canvases = [];
+
+// Cursive controls (Phase 3): checkbox + 0-100% slider, defaults from choose.js.
+$('#cursiveOn').checked = CURSIVE_DEFAULTS.enabled;
+$('#cursiveAmt').value = CURSIVE_DEFAULTS.amount * 100;
+
+function readCursive() {
+  return { enabled: $('#cursiveOn').checked, amount: (Number($('#cursiveAmt').value) || 0) / 100 };
+}
+
+// Seed the gap controls from the single source of truth in layout.js.
+$('#wordMin').value = SPACING.wordMin;
+$('#wordMax').value = SPACING.wordMax;
+$('#lineMin').value = SPACING.lineMin;
+$('#lineMax').value = SPACING.lineMax;
+
+let toastTimer;
+function toast(message) {
+  const el = $('#toast');
+  el.textContent = message;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+// Read the four controls and return a spacing object (correlation scales are
+// internal constants, not user controls). Returns null and toasts if invalid.
+function readSpacing() {
+  const s = {
+    wordMin: Number($('#wordMin').value),
+    wordMax: Number($('#wordMax').value),
+    lineMin: Number($('#lineMin').value),
+    lineMax: Number($('#lineMax').value),
+    wordScale: SPACING.wordScale,
+    lineScale: SPACING.lineScale,
+  };
+  const vals = [s.wordMin, s.wordMax, s.lineMin, s.lineMax];
+  if (!vals.every(Number.isFinite)) { toast('Gap settings must all be numbers.'); return null; }
+  if (vals.some((v) => v < 0)) { toast('Gaps cannot be negative — words would overlap.'); return null; }
+  if (s.wordMax <= s.wordMin) { toast('Word gap max must be greater than word gap min.'); return null; }
+  if (s.lineMax <= s.lineMin) { toast('Line gap max must be greater than line gap min.'); return null; }
+  return s;
+}
+
+async function ensureStore() {
+  if (store && glyphCount(store)) { initCursive(store); return; }
+  const res = await fetch('../prototype/handwriting_font.json');
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  store = loadLegacyJson(await res.json());
+}
+
+async function render() {
+  try {
+    await ensureStore();
+  } catch (e) {
+    $('#warn').textContent = 'No profile. Capture in index.html or serve with "node server.mjs". ' + e.message;
+    return;
+  }
+  const spacing = readSpacing();
+  if (!spacing) return; // a toast already explained what is wrong
+  const text = $('#text').value;
+  const seed = Number($('#seed').value) || 1;
+  const doc = layoutDocument(store, text, seed, PAGE, spacing, readCursive());
+
+  preview.textContent = '';
+  canvases = doc.pages.map((page, pageIndex) => {
+    const canvas = drawPage(page, PAGE, { ink: $('#ink').value, seed, pageIndex });
+    canvas.className = 'page';
+    preview.appendChild(canvas);
+    return canvas;
+  });
+
+  const report = fallbackReport(store, text);
+  $('#stats').innerHTML = `pages <b>${doc.pages.length}</b> · lines <b>${doc.lineCount}</b> · ` +
+    `glyphs in profile <b>${glyphCount(store)}</b> (${totalSamples(store)} variants) · seed <b>${seed}</b> · cursive <b>${doc.cursive.enabled ? Math.round(doc.cursive.amount * 100) + '%' : 'off'}</b>`;
+  $('#warn').innerHTML = report.message +
+    (doc.cursive.enabled && !(store.cursive && Object.keys(store.cursive.extras || {}).length)
+      ? ' No cursive samples captured yet — the text renders print-only. <a class="link" href="cursive.html">Capture cursive →</a>'
+      : '');
+  $('#pdf').disabled = canvases.length === 0;
+}
+
+$('#render').onclick = render;
+['wordMin', 'wordMax', 'lineMin', 'lineMax'].forEach((id) => {
+  $('#' + id).addEventListener('change', readSpacing); // toast as soon as max <= min
+});
+['cursiveOn', 'cursiveAmt'].forEach((id) => {
+  $('#' + id).addEventListener('change', render);
+});
+$('#pdf').onclick = async () => {
+  const bytes = await pagesToPdf(canvases, A4_PT);
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'handwriting.pdf';
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+render();
+</script>
+</body>
+</html>

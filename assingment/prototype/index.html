@@ -251,20 +251,36 @@ Remember: small details matter.</textarea>
   // Size: k = 1 + e, e = wordTerm + letterTerm, clamp |e| <= 0.05.
   // Sigmas below are per s.size=1.0; at the default s.size=0.36 the combined
   // sd is ~0.02 (measured 0.0209), rare tails hit the 0.05 clamp.
-  // Lift: one-sided, total clamped to [0, 0.12]. Slant: shear about the
-  // baseline, mean from the slant slider (0..20 deg), per-line offsets from
-  // a bounded walk (sigma 0.8 deg, clamp +-2, consecutive diffs enforced
-  // 0.3-1.2 like the Phase-2 left-offset fix), in-line drift +-0.4 deg and
-  // per-glyph jitter +-0.3 deg.
+  // Lift: one-sided, total clamped to [0, 0.12]. Slant: shear of the INK
+  // about the baseline; the pen advance does NOT use the sheared bounding
+  // box (spacing fix): advance = base advance x size scale, plus a small
+  // italic compensation (10% of the top shift, capped at 0.015 cap units)
+  // so a slanted top does not collide with its neighbour.
+  // Slant mean comes from the slant slider (0..20 deg); the offset/drift/
+  // jitter deviations are gated by slant/0.5 (capped at 1) so slant=0 gives
+  // exactly Phase-2 output (angle 0), while the default 0.5 keeps the full
+  // spec variation (per-line offsets from a bounded walk sigma 0.8 deg,
+  // clamp +-2, consecutive diffs enforced 0.3-1.2; in-line drift +-0.4 deg;
+  // per-glyph jitter +-0.3 deg).
   const P3 = {
     SIZE_WORD: 0.033, SIZE_LETTER: 0.044, SIZE_CAP_MULT: 1.35, SIZE_CLAMP: 0.05,
     LIFT_LINE_MAX: 0.05, LIFT_WORD_MAX: 0.06, LIFT_GLYPH_MAX: 0.03, LIFT_TOTAL_MAX: 0.12,
     LIFT_NOISE_SCALE: 3,
     SLANT_MEAN_DEG: 20, SLANT_SIGMA: 0.8, SLANT_RHO: 0.85, SLANT_MIN: -2, SLANT_MAX: 2,
     SLANT_DIFF_MIN: 0.3, SLANT_DIFF_MAX: 1.2,
-    SLANT_DRIFT: 0.4, SLANT_DRIFT_SCALE: 6, SLANT_JITTER: 0.15, SLANT_JITTER_MAX: 0.3
+    SLANT_DRIFT: 0.4, SLANT_DRIFT_SCALE: 6, SLANT_JITTER: 0.15, SLANT_JITTER_MAX: 0.3,
+    ITALIC_CORR: 0.10, ITALIC_CORR_MAX: 0.015
   };
   function p3MeanDeg(s){ return clamp(s.slant,0,1)*P3.SLANT_MEAN_DEG; }
+  function p3SlantGate(s){ return clamp(clamp((s&&typeof s.slant==='number')?s.slant:0.5,0,1)/0.5,0,1); }
+  // Small italic compensation (cap units): a fraction of the sheared top
+  // shift, so neighbouring ink does not collide, without widening the
+  // advance the way a full bounding-box measurement would (~+24%).
+  // Callers additionally cap it at 2% of the glyph's own base advance, so
+  // the mean letter gap stays within ~2% of Phase 2 (spec <3%).
+  function p3ItalicCorr(topCap,tan){
+    return clamp(topCap*tan*P3.ITALIC_CORR,0,P3.ITALIC_CORR_MAX);
+  }
   function p3FastFactor(s){
     const f=(s && typeof s.fast==='number')?s.fast:0.5;
     return 0.6+0.8*clamp(f,0,1);
@@ -318,15 +334,239 @@ Remember: small details matter.</textarea>
       -P3.SIZE_CLAMP,P3.SIZE_CLAMP);
     return {k:1+e,e};
   }
-  // Total glyph slant in degrees: line slant + slow in-line drift + tiny
-  // per-glyph jitter. Deterministic from (L,wi,ci) so measuring and drawing
-  // agree exactly.
-  function p3SlantDeg(seed,L,wi,ci,lineSlantDeg){
+  // Total glyph slant in degrees: mean + gate*(offset + slow in-line drift
+  // + tiny per-glyph jitter). gate=1 at the default slant slider (0.5) and
+  // 0 when the slider is 0, so zero variation == Phase 2. Deterministic
+  // from (L,wi,ci) so measuring and drawing agree exactly.
+  function p3SlantDeg(seed,L,wi,ci,offsetDeg,meanDeg,gate){
     const drift=valueNoise1D(String(seed)+'|slantDrift|'+String(L),wi*8+ci,P3.SLANT_DRIFT_SCALE)*P3.SLANT_DRIFT;
     const jR=rngFor(seed,'p3slantJ',L,wi,ci);
     const jit=clamp(gaussian(jR)*P3.SLANT_JITTER,-P3.SLANT_JITTER_MAX,P3.SLANT_JITTER_MAX);
-    return lineSlantDeg+drift+jit;
+    return meanDeg+gate*(offsetDeg+drift+jit);
   }
+
+  // ================= PHASE 4: variant shapes, warp, tails, joins ==========
+  // Units are cap-height units until rasterization. Every random choice is
+  // deterministic via rngFor(seed,...) keyed by (line, word, char) plus a
+  // purpose tag. Per-glyph results are computed once in measureWord (layout)
+  // and stored on the char record, so measuring and drawing agree exactly.
+  // P4-START
+  const P4 = {
+    WARP_A1: 0.02, WARP_A2: 0.01,             // sine-mode amplitudes (cap)
+    TAIL_FRAC_MIN: 0.15, TAIL_FRAC_MAX: 0.25, // tail portion of last stroke
+    TAIL_MIN: 0.85, TAIL_MAX: 1.25,           // tail scale range (~+-20%)
+    TAIL_FAST_BIAS: 0.2, TAIL_MINLEN: 0.08,   // fast-write bias; min stroke
+    JOIN_P: 0.55, JOIN_P_AMP: 0.25, JOIN_P_SCALE: 2.0, // join probability
+    JOIN_TAN_MAX: 35,                          // max tangent diff (degrees)
+    JOIN_MAX_GAP: 0.5, JOIN_SNAP: 0.06,        // max gap / snap lead (cap)
+    CLS_TOL: 0.15,                             // x-height fraction for classes
+    YS_FLOOR: 0.25                             // min ink height (norm units)
+  };
+  function p4XHeight(s){
+    const lc=(s&&typeof s.lowercase==='number')?s.lowercase:0.72;
+    return 0.6*(lc/0.72);
+  }
+  function p4Classify(capY,xh){
+    const t=P4.CLS_TOL*xh;
+    if(Math.abs(capY)<=t) return 'baseline';
+    if(Math.abs(capY-xh)<=t) return 'top';
+    return 'other';
+  }
+  // Variant choice: uniform candidate, bumped forward on an immediate repeat
+  // of the same letter so the same variant is never used twice in a row
+  // (n>=2). The caller keeps the previous index per character in layout
+  // order; drawing reuses the stored index.
+  function p4VariantPick(rng,prevIdx,n){
+    if(!(n>=1)) return 0;
+    if(n===1) return 0;
+    let v=Math.floor(rng()*n);
+    if(v>=n) v=n-1;
+    if(v<0) v=0;
+    if(v===prevIdx) v=(v+1)%n;
+    return v;
+  }
+  function p4Arc(st){
+    const L=[0];
+    for(let i=1;i<st.length;i++)
+      L.push(L[i-1]+Math.hypot(st[i][0]-st[i-1][0],st[i][1]-st[i-1][1]));
+    return L;
+  }
+  // Low-frequency warp: sum of 2 smooth sine modes of arclength (the smooth
+  // equivalent of 2-3 control points), applied as perpendicular displacement.
+  // Both modes carry a sin(pi*t) envelope, so d(0)=d(1)=0 exactly: entry and
+  // exit points never move and joins are unaffected. |d| <= 0.02+0.01 cap.
+  function p4WarpStroke(st,rng){
+    const copy=st.map(p=>[p[0],p[1]]);
+    if(st.length<3) return {pts:copy,maxD:0};
+    const L=p4Arc(st), total=L[L.length-1];
+    if(!(total>1e-9)) return {pts:copy,maxD:0};
+    const a1=(rng()*2-1)*P4.WARP_A1, a2=(rng()*2-1)*P4.WARP_A2;
+    const ph=rng()*Math.PI*2;
+    const out=new Array(st.length); let maxD=0;
+    for(let i=0;i<st.length;i++){
+      const t=L[i]/total;
+      const env=Math.sin(Math.PI*t);
+      const dd=a1*env+a2*Math.sin(2*Math.PI*t+ph)*env;
+      const ad=Math.abs(dd); if(ad>maxD) maxD=ad;
+      const a=st[Math.max(0,i-1)], b=st[Math.min(st.length-1,i+1)];
+      let tx=b[0]-a[0], ty=b[1]-a[1];
+      const m=Math.hypot(tx,ty)||1; tx/=m; ty/=m;
+      out[i]=[st[i][0]-ty*dd, st[i][1]+tx*dd];
+    }
+    return {pts:out,maxD};
+  }
+  // Tail length: scale the last 15-25% of the glyph's last stroke about the
+  // tail start by 0.85-1.25 (fast writing biases longer). The glyph's start
+  // point is untouched. Strokes shorter than 0.08 cap (e.g. i-dots) are
+  // skipped (factor 1) so dots never stretch into dashes.
+  function p4TailStroke(st,rng,fast){
+    const copy=st.map(p=>[p[0],p[1]]);
+    const f=P4.TAIL_FRAC_MIN+rng()*(P4.TAIL_FRAC_MAX-P4.TAIL_FRAC_MIN);
+    let factor=P4.TAIL_MIN+rng()*(P4.TAIL_MAX-P4.TAIL_MIN)
+      +(clamp(typeof fast==='number'?fast:0.5,0,1)-0.5)*P4.TAIL_FAST_BIAS;
+    factor=clamp(factor,P4.TAIL_MIN,P4.TAIL_MAX);
+    const L=p4Arc(st), total=L[L.length-1];
+    if(!(total>P4.TAIL_MINLEN)) return {pts:copy,f,factor:1,skipped:true};
+    const start=(1-f)*total;
+    let j=0;
+    while(j<L.length-2 && L[j+1]<start) j++;
+    const segLen=(L[j+1]-L[j])||1;
+    const u=clamp((start-L[j])/segLen,0,1);
+    const S=[st[j][0]+(st[j+1][0]-st[j][0])*u, st[j][1]+(st[j+1][1]-st[j][1])*u];
+    const out=new Array(st.length);
+    for(let i=0;i<st.length;i++){
+      if(L[i]<start) out[i]=[st[i][0],st[i][1]];
+      else out[i]=[S[0]+(st[i][0]-S[0])*factor, S[1]+(st[i][1]-S[1])*factor];
+    }
+    return {pts:out,f,factor,skipped:false};
+  }
+  function p4EndTangent(st,atEnd){
+    const pts=atEnd?st.slice(-4):st.slice(0,4);
+    const a=pts[0], b=pts[pts.length-1];
+    const dx=b[0]-a[0], dy=b[1]-a[1], m=Math.hypot(dx,dy);
+    if(!(m>1e-9)) return [1,0];
+    return [dx/m,dy/m];
+  }
+  function p4AngDiffDeg(t1,t2){
+    const c=clamp(t1[0]*t2[0]+t1[1]*t2[1],-1,1);
+    const s=t1[0]*t2[1]-t1[1]*t2[0];
+    return Math.abs(Math.atan2(s,c))*180/Math.PI;
+  }
+  // Map normalized font strokes ([0,1] box, y-down) into sheared-local cap
+  // units, then warp + tail + shear. Returns everything the join pass and
+  // the renderer need. ly is y-up from the nominal baseline (lift applied
+  // separately); sx already includes the per-glyph slant shear.
+  function p4PrepareGlyph(normStrokes,ch,s,k,lift,tanDeg,seed,L,wi,ci){
+    const e=glyphExtent(ch,s), boxH=e.top-e.bottom;
+    let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;
+    for(const st of normStrokes) for(const p of st){
+      if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
+      if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
+    }
+    if(!(maxX>minX)||!(maxY>minY)) return null;
+    const xs=maxX-minX, ys=maxY-minY;
+    // Uniform scale from the ink height (floored so flat glyphs like '-'
+    // keep sane widths); aspect is preserved, never stretched per-axis.
+    const sc=boxH*k/Math.max(ys,P4.YS_FLOOR);
+    const wCap=sc;
+    const wRng=rngFor(seed,'p4warp',L,wi,ci);
+    const tRng=rngFor(seed,'p4tail',L,wi,ci);
+    let strokes=normStrokes.map(st=>st.map(p=>[p[0]*sc,(e.top-p[1]*boxH)*k]));
+    let maxD=0;
+    strokes=strokes.map(st=>{
+      const r=p4WarpStroke(st,wRng);
+      if(r.maxD>maxD) maxD=r.maxD;
+      return r.pts;
+    });
+    const fast=(s&&typeof s.fast==='number')?s.fast:0.5;
+    const li=strokes.length-1;
+    const tr=p4TailStroke(strokes[li],tRng,fast);
+    strokes[li]=tr.pts;
+    const tan=Math.tan((tanDeg||0)*Math.PI/180);
+    const sh=strokes.map(st=>st.map(p=>[p[0]+tan*p[1],p[1]]));
+    const entry=sh[0][0], lastS=sh[sh.length-1], exit=lastS[lastS.length-1];
+    const xh=p4XHeight(s);
+    return {
+      strokes:sh, wCap, sc,
+      entry, exit,
+      tanIn:p4EndTangent(sh[0],false), tanOut:p4EndTangent(lastS,true),
+      clsIn:p4Classify(entry[1],xh), clsOut:p4Classify(exit[1],xh),
+      maxWarpD:maxD, tailF:tr.f, tailFactor:tr.factor, tailSkipped:!!tr.skipped
+    };
+  }
+  function p4JoinProb(seed,L,wi,gapIdx){
+    return P4.JOIN_P+P4.JOIN_P_AMP
+      *valueNoise1D(String(seed)+'|join|'+String(L)+'|'+String(wi),gapIdx,P4.JOIN_P_SCALE);
+  }
+  function p4Cubic(p0,c1,c2,p3,t){
+    const u=1-t;
+    return [
+      u*u*u*p0[0]+3*u*u*t*c1[0]+3*u*t*t*c2[0]+t*t*t*p3[0],
+      u*u*u*p0[1]+3*u*u*t*c1[1]+3*u*t*t*c2[1]+t*t*t*p3[1]
+    ];
+  }
+  // Word-level join pass in cap units. items[i] = {adv, vec|null, isLetter,
+  // lift}. Returns pen positions px[] (post-join, word-relative), per-gap
+  // join flags, connector points mapped into the PREVIOUS glyph's
+  // sheared-local frame (so the renderer strokes glyph+connector as one
+  // path), the post-join width, and per-gap diagnostics.
+  function p4LayoutWord(items,ctx){
+    const n=items.length;
+    const px=new Array(n), joinPrev=new Array(n).fill(false);
+    const connPrev=new Array(n).fill(null), gapStats=[];
+    let x=0;
+    for(let i=0;i<n;i++){ px[i]=x; x+=items[i].adv; }
+    let joins=0;
+    for(let i=1;i<n;i++){
+      const A=items[i-1], B=items[i];
+      const g={a:i-1, b:i, decision:'nonvec'};
+      if(A.vec&&B.vec&&(A.isLetter&&B.isLetter)){
+        g.clsOut=A.vec.clsOut; g.clsIn=B.vec.clsIn;
+        const okC=(A.vec.clsOut==='baseline'&&B.vec.clsIn==='baseline')
+          ||(A.vec.clsOut==='top'&&B.vec.clsIn==='top');
+        if(!okC){ g.decision='class'; }
+        else{
+          const ang=p4AngDiffDeg(A.vec.tanOut,B.vec.tanIn);
+          g.ang=ang;
+          if(!(ang<P4.JOIN_TAN_MAX)){ g.decision='tangent'; }
+          else{
+            const exX=px[i-1]+A.vec.exit[0], exY=A.vec.exit[1]-A.lift;
+            const enX=px[i]+B.vec.entry[0], enY=B.vec.entry[1]-B.lift;
+            const gapLen=Math.hypot(enX-exX,enY-exY);
+            g.gapLen=gapLen;
+            if(!(gapLen<=P4.JOIN_MAX_GAP)){ g.decision='gap'; }
+            else{
+              const p=p4JoinProb(ctx.seed,ctx.L,ctx.wi,i-1);
+              const u=rngFor(ctx.seed,'p4join',ctx.L,ctx.wi,i)();
+              g.p=p; g.u=u;
+              if(!(u<p)){ g.decision='prob'; }
+              else{
+                // Join: pull B left so its entry sits SNAP past A's exit.
+                const newPx=px[i-1]+A.vec.exit[0]+P4.JOIN_SNAP-B.vec.entry[0];
+                const delta=newPx-px[i];
+                for(let j=i;j<n;j++) px[j]+=delta;
+                const p0=[px[i-1]+A.vec.exit[0], A.vec.exit[1]-A.lift];
+                const p3=[p0[0]+P4.JOIN_SNAP, B.vec.entry[1]-B.lift];
+                const h=Math.hypot(p3[0]-p0[0],p3[1]-p0[1])/3;
+                const c1=[p0[0]+A.vec.tanOut[0]*h, p0[1]+A.vec.tanOut[1]*h];
+                const c2=[p3[0]-B.vec.tanIn[0]*h, p3[1]-B.vec.tanIn[1]*h];
+                const wpts=[];
+                for(let k2=1;k2<=8;k2++) wpts.push(p4Cubic(p0,c1,c2,p3,k2/8));
+                // Map into A's sheared-local frame (renderer origin sits at
+                // A's pen, shifted up by A's lift).
+                connPrev[i-1]=wpts.map(w=>[w[0]-px[i-1], w[1]+A.lift]);
+                joinPrev[i]=true; joins++;
+                g.decision='join'; g.connLen=Math.hypot(p3[0]-p0[0],p3[1]-p0[1]);
+              }
+            }
+          }
+        }
+      } else if(A.vec&&B.vec){ g.decision='nonletter'; }
+      gapStats.push(g);
+    }
+    return {px,joinPrev,connPrev,width:px[n-1]+items[n-1].adv,joins,gaps:n-1,gapStats};
+  }
+  // P4-END
 
   // ---- Capture ------------------------------------------------------------
   const cap = $('#captureCanvas'), ctx = cap.getContext('2d');
@@ -429,6 +669,86 @@ Remember: small details matter.</textarea>
       if(lo && lo.length) return { src: pick(lo, rng), synth: true };
     }
     return { src: null, synth: false };
+  }
+
+  // ---- Phase 4: stroke-vector font bridge (handwriting_font.json) ---------
+  // The captured PNG profile carries no stroke data, and Phase 4 (warp,
+  // tails, entry/exit joins) needs strokes. The bundled JSON font provides
+  // them: { char: [{strokes: [[[x,y],...], ...]}, ...] } in a ~0-1 box,
+  // y-down. Captured PNGs still take precedence when present; vectors fill
+  // in otherwise; the system-font fallback remains the last resort.
+  let FONT = null, fontReady = null;
+  function validateFont(j){
+    if(!j || typeof j !== 'object') return null;
+    const out = {};
+    for(const k of Object.keys(j)){
+      const arr = j[k];
+      if(!Array.isArray(arr) || !arr.length) continue;
+      const vars = [];
+      for(const v of arr){
+        if(!v || !Array.isArray(v.strokes) || !v.strokes.length) continue;
+        const strokes = [];
+        for(const st of v.strokes){
+          if(!Array.isArray(st) || st.length < 2) continue;
+          const pts = [];
+          for(const p of st){
+            if(Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+              pts.push([p[0], p[1]]);
+          }
+          if(pts.length >= 2) strokes.push(pts);
+        }
+        if(strokes.length) vars.push({ strokes });
+      }
+      if(vars.length) out[k] = vars;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  function ensureFont(){
+    if(!fontReady){
+      fontReady = fetch('handwriting_font.json').then(r=>{
+        if(!r.ok) throw new Error('font fetch '+r.status);
+        return r.json();
+      }).then(j=>{ FONT = validateFont(j); }).catch(()=>{ FONT = null; });
+    }
+    return fontReady;
+  }
+
+  // Phase 4 vector renderer: strokes are sheared-local cap units baked at
+  // layout time (slant included), so drawing is translate + scale only.
+  // A join connector (if any) was mapped into this glyph's frame at layout
+  // and is stroked as a continuation of the last subpath: literally the
+  // same stroke, so ink width flows continuously.
+  function drawVectorGlyph(c, ci, penX, baseY, capH, opts, rng){
+    const v = ci.vec;
+    if(!v || !v.strokes || !v.strokes.length) return;
+    const q = c.getContext('2d');
+    const alpha = clamp(.80 + gaussian(rng)*.045*opts.pressure, .58, .98);
+    const inkPool = opts.pressure*.32;
+    q.save();
+    q.globalAlpha = alpha;
+    q.translate(penX, baseY - (ci.lift||0)*capH);
+    q.strokeStyle = opts.ink;
+    q.lineWidth = Math.max(0.7, opts.inkThickness);
+    q.lineCap = 'round'; q.lineJoin = 'round';
+    const trace = ()=>{
+      q.beginPath();
+      for(let si=0; si<v.strokes.length; si++){
+        const st = v.strokes[si];
+        if(!st.length) continue;
+        q.moveTo(st[0][0]*capH, -st[0][1]*capH);
+        for(let i=1;i<st.length;i++) q.lineTo(st[i][0]*capH, -st[i][1]*capH);
+        if(si===v.strokes.length-1 && ci.conn && ci.conn.length){
+          for(const p of ci.conn) q.lineTo(p[0]*capH, -p[1]*capH);
+        }
+      }
+    };
+    trace(); q.stroke();
+    if(inkPool>.1 && rng()<.35){
+      q.globalAlpha=inkPool*.22;
+      q.translate((rng()-.5)*.8,(rng()-.5)*.8);
+      trace(); q.stroke();
+    }
+    q.restore();
   }
 
   function shorthandWord(w,rng,p){
@@ -586,7 +906,9 @@ Remember: small details matter.</textarea>
       const L=(opts&&typeof opts.preL==='number')?opts.preL:0,
             wi=(opts&&typeof opts.preWi==='number')?opts.preWi:0,
             ci=(opts&&typeof opts.preCi==='number')?opts.preCi:0;
-      slantDeg=p3MeanDeg(opts)+p3SlantDeg('fallback',L,wi,ci,0);
+      // Compat path (layout always passes preSlantDeg): mean + gated
+      // drift/jitter, zero line offset (no walk lookup needed here).
+      slantDeg=p3SlantDeg('fallback',L,wi,ci,0,p3MeanDeg(opts),p3SlantGate(opts));
     }
     const liftPx=liftCap*capHeight;
     const baseY=baseline-liftPx;
@@ -602,8 +924,8 @@ Remember: small details matter.</textarea>
       const fontPx=Math.max(14,capHeight*k);
       fallbackText(c,ch,x,baseY,fontPx,slantDeg,opts.ink);
       if(opts && typeof opts.preAdv==='number') return opts.preAdv;
-      const shift=capHeight*k*tan;
-      return Math.max(5,fontPx*0.55+shift);
+      const corrFb=p3ItalicCorr(k,tan)*capHeight;
+      return Math.max(5,fontPx*0.55+corrFb);
     }
     // Width comes from the glyph's own aspect ratio — never a fixed grid.
     // Sizes already include k (scale about the baseline-left origin: the box
@@ -614,14 +936,17 @@ Remember: small details matter.</textarea>
     const ratio=img.width/Math.max(1,img.height); const w=drawH*ratio;
     const alpha=clamp(.80 + gaussian(rng)*.045*opts.pressure,.58,.98);
     const inkPool=opts.pressure*.32;
-    const q=c.getContext('2d');q.save();q.globalAlpha=alpha;q.translate(x,baseY);q.transform(1,0,-tan,1,0,0);
+    const q=c.getContext('2d');q.save();q.globalAlpha=alpha;q.translate(x+w*.04,baseY);q.transform(1,0,-tan,1,0,0);
     q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);
     if(inkPool>.1 && rng()<.35){q.globalAlpha=inkPool*.22;q.translate((rng()-.5)*.8,(rng()-.5)*.8);q.drawImage(img,0,0,img.width,img.height,0,-topOff,w,drawH);}
     q.restore();
     if(opts && typeof opts.preAdv==='number') return opts.preAdv;
-    const shift=topOff*tan;
+    // Compat path only (layout passes preAdv): base advance x size scale +
+    // small italic compensation — never the full sheared bounding box.
+    const topCap=e.top*k;
+    const corr=p3ItalicCorr(topCap,tan)*capHeight;
     const core=(.88 + opts.spacing*.08 + gaussian(rng)*opts.spacing*.035);
-    return Math.max(5,w*core+shift);
+    return Math.max(5,w*core+corr);
   }
 
   // ================= PHASE 2: human layout =================
@@ -681,9 +1006,11 @@ Remember: small details matter.</textarea>
     const boxes=[]; let x=leftPx;
     for(let wi=0;wi<words.length;wi++){
       if(wi>0) x+=gaps[wi-1];
-      const w=words[wi];
+      const w=words[wi], wStart=x;
       for(const ci of w.chars){
-        const adv=ci.adv, x0=x, x1=x+adv;
+        // Phase 4: pen positions are post-join (ci.px, px units); words
+        // without joins keep px as the plain cumulative advance.
+        const adv=ci.adv, x0=wStart+(ci.px||0), x1=x0+adv;
         const bAt=baseline+(x0-leftPx)*slope;
         const e=glyphExtent(ci.ch,s);
         const liftPx=(ci.lift||0)*baseH;
@@ -691,8 +1018,8 @@ Remember: small details matter.</textarea>
         const shift=e.top*baseH*(ci.k||1)*tan;
         const bx0=x0+Math.min(0,shift), bx1=x0+adv+Math.max(0,shift);
         boxes.push({x0:bx0,x1:bx1,top:bAt-liftPx-e.top*baseH*ci.k,bot:bAt-liftPx-e.bottom*baseH*ci.k});
-        x+=adv;
       }
+      x=wStart+w.width;
     }
     return {boxes,xEnd:x};
   }
@@ -707,17 +1034,23 @@ Remember: small details matter.</textarea>
     const mctx=measureCtx2d();
     const leftCaps=p2LeftOffsets(seed,P2.MAX_LINES);
     const rawGap=boundedWalk(String(seed)+'|lgap',P2.MAX_LINES,{mean:0,sigma:P2.GAP_SIGMA*(0.5+s.baseline),rho:P2.GAP_RHO,min:P2.GAP_MIN,max:P2.GAP_MAX});
-    // Phase 3 per-line slants (degrees, offsets) + mean. lineSlant[L] is the
-    // reported per-line slant; glyph angles add drift+jitter on top.
+    // Phase 3 per-line slants (degrees). Offsets are seed-only (no shimmer
+    // when sliders move); the mean and the gate come from settings.
+    // lineSlant[L] is the reported per-line slant; glyph angles add gated
+    // drift+jitter on top.
     const p3Mean=p3MeanDeg(s);
+    const p3Gate=p3SlantGate(s);
     const p3Offsets=p3LineOffsets(seed,P2.MAX_LINES);
-    const p3LineSlant=L=>p3Mean+(p3Offsets[L]||0);
+    const p3LineSlant=L=>p3Mean+p3Gate*(p3Offsets[L]||0);
     const pages=[];
     let cur={lines:[],prevActual:null,prevBoxes:null,realCount:0,blankAccum:0,drift:0,pageIndex:0,blankBetween:0};
     pages.push(cur);
     let globalIdx=0;
     const statLeft=[],statEdge=[],statGap=[],statRatio=[],statDrift=[];
     const statE=[],statLift=[],statLineSlant=[];
+    // Phase 4: previous variant index per character (no immediate repeat).
+    // Fresh per layoutDocument; document order is deterministic.
+    const p4VarPrev=new Map();
     const pageDrift=pi=>(rngFor(seed,'pageDrift',pi)()<.5?-1:1);
     const slopeFor=(pi,L)=>{
       const pds=pageDrift(pi);
@@ -726,14 +1059,19 @@ Remember: small details matter.</textarea>
     };
 
     function measureWord(text,L,posInLine){
-      const chars=[]; let w=0;
-      const lineSlant=p3LineSlant(L);
+      const chars=[];
+      const lineOffset=p3Offsets[L]||0;
+      const lineSlant=p3Mean+p3Gate*lineOffset;
       const lineLift=p3LineLift(seed,L,s);
       const wSlope=p3WordSlope(seed,L,posInLine,s);
       const wlen=text.length;
       for(let ci=0;ci<text.length;ci++){
         const ch=text[ci];
         const chRng=rngFor(seed,'char',L,posInLine,ci);
+        // Keep the exact Phase-2 stream order (g1 then g2) so the spacing
+        // jitter is bit-identical to Phase 2 when size/slant/lift are 0.
+        // The spacing slider is applied once, in `core` below.
+        gaussian(chRng);
         const g2=gaussian(chRng);
         // Phase 3 size: slow word term + per-letter term (capitals wider).
         const {k,e}=p3SizeK(seed,L,posInLine,ci,ch,s);
@@ -741,30 +1079,71 @@ Remember: small details matter.</textarea>
         // so the word rises or sags as a unit; glyph term is [0,0.03].
         const t=wlen>1?ci/(wlen-1):0;
         const lift=clamp(lineLift+t*wSlope+p3GlyphLift(seed,L,posInLine,ci,s),0,P3.LIFT_TOTAL_MAX);
-        const slantDeg=p3SlantDeg(seed,L,posInLine,ci,lineSlant);
+        const slantDeg=p3SlantDeg(seed,L,posInLine,ci,lineOffset,p3Mean,p3Gate);
         const tan=Math.tan(slantDeg*Math.PI/180);
-        const vRng=rngFor(seed,'variant',L,posInLine,ci);
-        const res=resolveProfileSrc(state.profile,ch,vRng);
-        let adv;
+        // Phase 4 variant choice (shared by PNG slots and vector variants):
+        // deterministic via rngFor, never the same variant twice in a row
+        // for the same letter. Holes in PNG slot arrays are compacted so
+        // every pick resolves to real ink. Captured PNGs win over vectors.
+        const pngArr=state.profile[ch];
+        const pngLo=(!pngArr?.length && /[A-Z]/.test(ch))
+          ? state.profile[ch.toLowerCase()] : null;
+        const pngUse=(pngArr&&pngArr.filter(Boolean).length)
+          ? pngArr.filter(Boolean)
+          : ((pngLo&&pngLo.filter(Boolean).length)?pngLo.filter(Boolean):null);
+        const pngSynth=!!(!((pngArr&&pngArr.filter(Boolean).length))&&pngUse);
+        const vecPool=(!pngUse&&FONT&&FONT[ch]&&FONT[ch].length)?FONT[ch]:null;
+        const poolN=pngUse?pngUse.length:(vecPool?vecPool.length:0);
+        const vRng=rngFor(seed,'p4var',L,posInLine,ci);
+        const vi=poolN?p4VariantPick(vRng,p4VarPrev.get(ch),poolN):0;
+        if(poolN) p4VarPrev.set(ch,vi);
+        const src=pngUse?pngUse[vi%pngUse.length]:null;
+        let adv, vec=null;
         const e2=glyphExtent(ch,s), boxH=e2.top-e2.bottom;
-        const img=res.src?glyphImages.get(res.src):null;
-        if(!img){
+        const img=src?glyphImages.get(src):null;
+        if(img){
+          const ratio=img.width/Math.max(1,img.height);
+          // Base advance (Phase 1/2 box width) x size scale k, times the
+          // single spacing factor — shear does not widen the pen step.
+          const ww=boxH*baseH*k*ratio;
+          const wBase=ww*(.88+s.spacing*.08+g2*s.spacing*.035);
+          const corr=Math.min(p3ItalicCorr(e2.top*k,tan)*baseH,0.02*wBase);
+          adv=Math.max(5,wBase+corr);
+        }else if(vecPool){
+          // Vector advance mirrors the PNG formula: the uniform vector
+          // scale (wCap, cap units, size included) plays the role of the
+          // image aspect width. Slant shear never widens the pen step.
+          vec=p4PrepareGlyph(vecPool[vi%vecPool.length].strokes,
+            ch,s,k,lift,slantDeg,seed,L,posInLine,ci);
+          const ww=vec?vec.wCap*baseH:boxH*baseH*k*0.55;
+          const wBase=ww*(.88+s.spacing*.08+g2*s.spacing*.035);
+          const corr=vec?Math.min(p3ItalicCorr(e2.top*k,tan)*baseH,0.02*wBase):0;
+          adv=Math.max(5,wBase+corr);
+        }else{
           let mw=10;
           try{ mctx.font=`italic ${Math.max(14,baseH*k)}px "Segoe Print", "Comic Sans MS", cursive`; mw=mctx.measureText(ch).width||10; }catch{ mw=10; }
-          adv=Math.max(5,mw+baseH*k*tan);
-        }else{
-          const ratio=img.width/Math.max(1,img.height);
-          const ww=boxH*baseH*k*ratio;
-          const topOff=e2.top*baseH*k;
-          adv=ww*(.88+s.spacing*.08+g2*s.spacing*.035)+topOff*tan;
-          adv=Math.max(5,adv);
+          // Base advance (measured at the scaled size, i.e. base x k) plus
+          // the small italic compensation — never the full shear shift.
+          adv=Math.max(5,mw+Math.min(p3ItalicCorr(k,tan)*baseH,0.02*mw));
         }
-        chars.push({ch,k,e,lift,slantDeg,adv,src:res.src,synth:res.synth});
-        w+=adv;
+        chars.push({ch,k,e,lift,slantDeg,adv,src,synth:pngSynth,vi,vec,
+          isLetter:/[A-Za-z]/.test(ch),px:0,conn:null});
       }
+      // Phase 4 join pass (cap units). Post-join pen positions feed both
+      // measuring (word width, boxes) and drawing.
+      const items=chars.map(c2=>({adv:c2.adv/baseH,vec:c2.vec,
+        isLetter:c2.isLetter,lift:c2.lift}));
+      const lay=items.length?p4LayoutWord(items,{seed,L,wi:posInLine})
+        :{px:[],joinPrev:[],connPrev:[],width:0,joins:0,gaps:0,gapStats:[]};
+      for(let i=0;i<chars.length;i++){
+        chars[i].px=lay.px[i]*baseH;
+        if(lay.connPrev[i]) chars[i].conn=lay.connPrev[i];
+      }
+      const w=lay.width*baseH;
       // word.slant kept for compat; glyph-level preSlantDeg is authoritative.
       const slant=(rngFor(seed,'wslant',L,posInLine)()-.5)*s.slant*.06;
-      return {chars,width:w,slant,lineSlant,lineLift};
+      return {chars,width:w,slant,lineSlant,lineLift,
+        p4joins:lay.joins,p4gaps:lay.gaps,p4gapStats:lay.gapStats};
     }
 
     for(let r=0;r<rawLines.length;r++){
@@ -808,7 +1187,13 @@ Remember: small details matter.</textarea>
         // Accumulate words that fit within THIS line's own limit.
         const lineWords=[],gaps=[],mults=[]; let x=leftPx, pos=0;
         let tmp=wi;
+        // Phase 4: variant picks are layout-order state. A word measured but
+        // not placed (no fit) must not consume picks, or later "no repeat"
+        // guards compare against discarded values. Snapshot/restore around
+        // each speculative measure.
+        let p4Snap=null;
         while(tmp<words.length){
+          p4Snap=new Map(p4VarPrev);
           const mw=measureWord(words[tmp].text,L,pos);
           let gapPx=0,mult=1;
           if(pos>0){
@@ -822,7 +1207,12 @@ Remember: small details matter.</textarea>
             statGap.push(mult);
             for(const ci of mw.chars){ statE.push(ci.e); statLift.push(ci.lift); }
             x+=mw.width; pos++; tmp++;
-          }else break;
+          }else{
+            // Word does not fit: discard its speculative variant picks.
+            p4VarPrev.clear();
+            for(const [kk,vv] of p4Snap) p4VarPrev.set(kk,vv);
+            break;
+          }
         }
         // Pathological: first word wider than the line (huge token). Place it
         // anyway on its own line so progress is guaranteed (safety clamp caps
@@ -967,16 +1357,20 @@ Remember: small details matter.</textarea>
         const word=LL.words[wi2];
         const wordStart=x;
         const wordBaseline=baseline+(x-lineMarginX)*slope;
-        let xc=x;
         for(let ci2=0;ci2<word.chars.length;ci2++){
           const chInfo=word.chars[ci2];
-          const localBaseline=baseline+(xc-lineMarginX)*slope;
+          // Phase 4: pen positions are post-join (px); same numbers as layout.
+          const penX=wordStart+(chInfo.px||0);
+          const localBaseline=baseline+(penX-lineMarginX)*slope;
           const visRng=rngFor(seed,'vis',LL.globalIdx,wi2,ci2);
-          const img=chInfo.src?glyphImages.get(chInfo.src):null;
-          drawGlyph(c,chInfo.ch,xc,localBaseline,baseH,word.slant,{...s,image:img,preK:chInfo.k,preAdv:chInfo.adv,preLift:chInfo.lift,preSlantDeg:chInfo.slantDeg,preL:LL.globalIdx,preWi:wi2,preCi:ci2,preWlen:word.chars.length},visRng);
-          xc+=chInfo.adv;
+          if(chInfo.vec){
+            drawVectorGlyph(c,chInfo,penX,localBaseline,baseH,s,visRng);
+          }else{
+            const img=chInfo.src?glyphImages.get(chInfo.src):null;
+            drawGlyph(c,chInfo.ch,penX,localBaseline,baseH,word.slant,{...s,image:img,preK:chInfo.k,preAdv:chInfo.adv,preLift:chInfo.lift,preSlantDeg:chInfo.slantDeg,preL:LL.globalIdx,preWi:wi2,preCi:ci2,preWlen:word.chars.length},visRng);
+          }
         }
-        x=xc;
+        x=wordStart+word.width;
         if(word.strike){ roughLine(c,wordStart-2,wordBaseline-baseH*.33,x+2,wordBaseline-baseH*.38,rngFor(seed,'strike',LL.globalIdx,wi2),1.1,.55); }
       }
       if(s.underlineHeads&&LL.heading){ roughLine(c,lineMarginX,baseline+8,clamp(x,lineMarginX+30,right),baseline+6,rngFor(seed,'ul',LL.globalIdx),1.2,.62); }
@@ -1015,6 +1409,10 @@ Remember: small details matter.</textarea>
     for(const line of rawLines){ for(const ch of line){ const arr=state.profile[ch]; if(arr?.length) arr.forEach(src=>needed.add(src)); } }
     const rawGlyphImages=new Map();
     await Promise.all([...needed].map(async src=>{ try{ rawGlyphImages.set(src,await loadImage(src)); }catch{} }));
+    // Phase 4: load the stroke-vector font (used where no PNG capture
+    // exists). Failure leaves FONT null and the renderer falls back to
+    // captured PNGs / system text with joins disabled for those glyphs.
+    await ensureFont();
     const inkRadiusPx=inkSliderToRadiusPx(s.inkThickness,+$('#inkThickness').min,+$('#inkThickness').max);
     const glyphImages=new Map();
     for(const [src,img] of rawGlyphImages) glyphImages.set(src, processInk(src,img,inkRadiusPx));

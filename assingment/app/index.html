@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handwrite — Capture (prerequisite)</title>
+<style>
+  :root{--bg:#0b0d16;--card:#141827;--line:rgba(148,163,184,.16);--text:#eef2f8;--muted:#9aa7bd;--accent:#7c3aed}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:22px;line-height:1.45}
+  h1{font-size:1.25rem;letter-spacing:-.02em;margin-bottom:2px}
+  .sub{color:var(--muted);font-size:.78rem;margin-bottom:18px}
+  .wrap{display:grid;grid-template-columns:1fr 320px;gap:18px;max-width:1280px;margin:auto;align-items:start}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .side{display:flex;flex-direction:column;gap:14px}
+  canvas{width:100%;height:auto;border-radius:10px;touch-action:none;cursor:crosshair;display:block}
+  label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin-bottom:6px}
+  input,textarea{width:100%;background:#0d1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit}
+  .char{text-align:center;font-size:1.3rem;font-weight:800}
+  button{cursor:pointer;border:0;border-radius:9px;padding:9px 13px;font:inherit;font-weight:700;color:#fff;background:#2a3350}
+  button.primary{background:linear-gradient(135deg,#6366f1,#7c3aed)}
+  button.bad{background:rgba(239,68,68,.16);color:#fca5a5}
+  .btn{display:inline-block;cursor:pointer;border:0;border-radius:9px;padding:9px 13px;font:inherit;font-weight:700;color:#fff;background:#2a3350;text-decoration:none}
+  .btn.primary{background:linear-gradient(135deg,#6366f1,#7c3aed)}
+  .topbar{max-width:1280px;margin:0 auto 14px;display:flex;gap:8px;flex-wrap:wrap}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .stats{font-size:.8rem;color:var(--muted)}
+  .stats b{color:var(--text)}
+  .palette{display:grid;grid-template-columns:repeat(9,1fr);gap:4px;margin-top:6px}
+  .p{aspect-ratio:1;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--muted);font-weight:700;padding:0}
+  .p:hover{color:#fff}
+  .p.sel{border-color:var(--accent);color:#fff;background:rgba(124,58,237,.22)}
+  .msg{font-size:.76rem;color:#9fe6c6;min-height:1.1em}
+  .warn{color:#f5c07a}
+  .help{font-size:.72rem;color:var(--muted)}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a class="btn primary" href="render.html">Render pages →</a>
+  <a class="btn" href="cursive.html">Capture cursive</a>
+</div>
+<div class="wrap">
+  <div class="card">
+    <h1>Capture handwriting</h1>
+    <div class="sub">Write each character inside the guides. Capitals reach the top (ascender) line, lowercase sit between the x-height and baseline lines, descenders drop to the bottom line. Stroke points are stored raw, with time and pressure. Saved samples are kept in this browser for the <a href="render.html" style="color:#a5b4fc">render page</a>.</div>
+    <div class="sub" style="margin:-12px 0 18px"><b style="color:#c7d2fe">Cursive support:</b> <a href="cursive.html" style="color:#a5b4fc">capture your cursive letter extras (entry/exit strokes) →</a></div>
+    <canvas id="cap" width="1000" height="360"></canvas>
+    <div class="row" style="margin-top:12px">
+      <button id="undo">Undo stroke</button>
+      <button id="clear" class="bad">Clear</button>
+      <button id="save" class="primary">Save variation</button>
+    </div>
+    <div class="msg" id="status">Ready.</div>
+  </div>
+
+  <div class="side">
+    <div class="card">
+      <label for="charInput">Character to capture</label>
+      <input id="charInput" class="char" maxlength="1" value="a" autocomplete="off">
+      <div class="stats" id="charStats"></div>
+      <label style="margin-top:12px">Captured characters</label>
+      <div class="palette" id="palette"></div>
+    </div>
+
+    <div class="card">
+      <label>Glyph store</label>
+      <div class="stats" id="storeStats"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="loadLegacy">Load Ali's legacy font</button>
+        <button id="importBtn">Import JSON</button>
+        <button id="exportBtn">Export store</button>
+      </div>
+      <input id="importInput" type="file" accept="application/json" hidden>
+      <div class="help" style="margin-top:8px">Run the app with <b>node server.mjs</b> so the bundled file at ../prototype/handwriting_font.json can load.</div>
+    </div>
+
+    <div class="card">
+      <label for="checkText">Missing-character check</label>
+      <textarea id="checkText" rows="2" placeholder="Type text...">The quick brown fox @ 42!</textarea>
+      <div class="msg" id="checkOut" style="margin-top:8px"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { createCapture } from './src/capture.js';
+import { createStore, addSample, glyphCount, totalSamples, serialize, deserialize } from './src/glyphstore.js';
+import { loadLegacyJson } from './src/loaders/legacyJson.js';
+import { fallbackReport } from './src/fallback.js';
+import { saveStore } from './src/persist.js';
+
+const $ = (sel) => document.querySelector(sel);
+const store = createStore();
+const capture = createCapture($('#cap'), { sideBearing: store.metrics.sideBearing });
+capture.setChar();
+let currentChar = 'a';
+
+function setStatus(text, warn) {
+  const el = $('#status');
+  el.textContent = text;
+  el.className = 'msg' + (warn ? ' warn' : '');
+}
+
+function mergeStore(other) {
+  for (const ch of Object.keys(other.glyphs)) {
+    for (const sample of other.glyphs[ch]) addSample(store, ch, sample);
+  }
+}
+
+function refresh() {
+  $('#storeStats').innerHTML =
+    `Characters: <b>${glyphCount(store)}</b> &nbsp; Variants: <b>${totalSamples(store)}</b>`;
+  const list = store.glyphs[currentChar] || [];
+  $('#charStats').innerHTML = `"${currentChar}" has <b>${list.length}</b> sample(s)`;
+  const chars = Object.keys(store.glyphs).sort();
+  const palette = $('#palette');
+  palette.textContent = '';
+  for (const ch of chars) {
+    const b = document.createElement('button');
+    b.className = 'p' + (ch === currentChar ? ' sel' : '');
+    b.textContent = ch;
+    b.onclick = () => { currentChar = ch; $('#charInput').value = ch; capture.setChar(); refresh(); };
+    palette.appendChild(b);
+  }
+  if (chars.length === 0) palette.innerHTML = '<div class="help">Nothing captured yet.</div>';
+  checkMissing();
+  saveStore(store);
+}
+
+function checkMissing() {
+  const r = fallbackReport(store, $('#checkText').value);
+  const el = $('#checkOut');
+  el.textContent = r.message || 'All characters present.';
+  el.className = 'msg' + (r.missing.length ? ' warn' : '');
+}
+
+$('#charInput').oninput = (e) => {
+  const v = e.target.value;
+  if (v) { currentChar = v[0]; capture.setChar(); refresh(); }
+};
+
+$('#save').onclick = () => {
+  const ch = $('#charInput').value.trim();
+  if ([...ch].length !== 1) { setStatus('Type exactly one character to capture.', true); return; }
+  const sample = capture.save();
+  if (!sample) { setStatus('Write the character first.', true); return; }
+  addSample(store, ch, sample);
+  currentChar = ch;
+  refresh();
+  setStatus(`Saved sample ${store.glyphs[ch].length} for "${ch}" (advance ${sample.advance.toFixed(3)} cap, bottom ${sample.bounds.bottom.toFixed(3)}).`);
+};
+
+$('#undo').onclick = () => capture.undo();
+$('#clear').onclick = () => capture.clear();
+
+$('#loadLegacy').onclick = async () => {
+  try {
+    const res = await fetch('../prototype/handwriting_font.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const loaded = loadLegacyJson(await res.json());
+    mergeStore(loaded);
+    refresh();
+    setStatus(`Loaded ${glyphCount(loaded)} characters / ${totalSamples(loaded)} variants (metrics estimated).`);
+  } catch (e) {
+    setStatus('Could not load ../prototype/handwriting_font.json. Serve with "node server.mjs". ' + e.message, true);
+  }
+};
+
+$('#importBtn').onclick = () => $('#importInput').click();
+$('#importInput').onchange = async (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  try {
+    const obj = JSON.parse(await file.text());
+    if (obj.glyphs) { mergeStore(deserialize(await file.text())); setStatus('Imported a glyph store.'); }
+    else { mergeStore(loadLegacyJson(obj)); setStatus('Imported a legacy profile (metrics estimated).'); }
+  } catch (e) {
+    setStatus('Import failed: ' + e.message, true);
+  }
+  refresh();
+};
+
+$('#exportBtn').onclick = () => {
+  const blob = new Blob([serialize(store)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'glyph-store.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+$('#checkText').oninput = checkMissing;
+refresh();
+</script>
+</body>
+</html>

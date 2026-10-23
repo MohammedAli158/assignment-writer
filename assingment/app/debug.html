@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handwrite — Prerequisite debug page</title>
+<style>
+  :root{--bg:#0b0d16;--card:#141827;--line:rgba(148,163,184,.16);--text:#eef2f8;--muted:#9aa7bd}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:22px;line-height:1.45}
+  h1{font-size:1.2rem;margin-bottom:2px}
+  .sub{color:var(--muted);font-size:.78rem;margin-bottom:16px}
+  .wrap{max-width:1080px;margin:auto;display:flex;flex-direction:column;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  canvas{width:100%;height:auto;border-radius:10px;background:#fbfcfd;display:block}
+  table{width:100%;border-collapse:collapse;font-size:.78rem}
+  th,td{text-align:right;padding:5px 7px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:.66rem}
+  .note{color:var(--muted);font-size:.75rem}
+  .warn{color:#f5c07a}
+  .metrics{font-size:.78rem;color:var(--muted);margin-top:8px}
+  .metrics b{color:var(--text)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Prerequisite debug page — glyph store</h1>
+    <div class="sub">Fixed specimen placed left-to-right by advance width through the guide lines (baseline, x-height, ascender, descender). This is NOT Phase 1: no randomness, no wrapping rules of the final renderer — it exists only to show that stored size, position and descenders survive.</div>
+    <canvas id="view" width="1000" height="620"></canvas>
+    <div class="metrics" id="metrics"></div>
+  </div>
+
+  <div class="card">
+    <h1>Measured numbers</h1>
+    <div class="sub">advance and vertical extents are in cap-height units (capital height = 1.0, baseline = 0, descenders negative).</div>
+    <table>
+      <thead><tr><th>Char</th><th>Class</th><th>Samples</th><th>Advance</th><th>Top</th><th>Bottom</th><th>Metrics</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script type="module">
+import { createStore, glyphCount, totalSamples } from './src/glyphstore.js';
+import { loadLegacyJson } from './src/loaders/legacyJson.js';
+import { capToPx, PX_PER_CAP } from './src/geometry.js';
+
+const SPECIMEN = ['Handwriting 0123', 'gjpqy AaBb &@#'];
+
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+const MARGIN_X = 60;
+const TOP_PAD = 70;
+const LINE_H = 1.9; // cap units between baselines
+
+function drawGuides(baselineY, m) {
+  const line = (y, color, dash, width) => {
+    ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash);
+    ctx.beginPath(); ctx.moveTo(MARGIN_X, y); ctx.lineTo(canvas.width - MARGIN_X, y); ctx.stroke(); ctx.restore();
+  };
+  line(baselineY, '#243b63', [], 2);
+  line(baselineY - m.xHeight * PX_PER_CAP, '#7fb0e0', [6, 6], 1.2);
+  line(baselineY - m.ascender * PX_PER_CAP, '#c0cdda', [4, 6], 1.2);
+  line(baselineY + m.descender * PX_PER_CAP, '#e6b3b3', [4, 6], 1.2);
+}
+
+function drawSample(sample, capX, baselineY, m) {
+  ctx.save();
+  ctx.strokeStyle = '#17243b';
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const stroke of sample.strokes) {
+    if (stroke.length < 2) continue;
+    ctx.beginPath();
+    const p0 = capToPx(capX + stroke[0].x, stroke[0].y, MARGIN_X, baselineY, PX_PER_CAP);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < stroke.length; i++) {
+      const p = capToPx(capX + stroke[i].x, stroke[i].y, MARGIN_X, baselineY, PX_PER_CAP);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function render(store) {
+  const m = store.metrics;
+  ctx.fillStyle = '#fbfcfd';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  let lineIndex = 0;
+  let baselineY = TOP_PAD + m.ascender * PX_PER_CAP;
+  let capX = 0;
+  drawGuides(baselineY, m);
+
+  for (const line of SPECIMEN) {
+    for (const ch of line) {
+      if (ch === ' ') { capX += 0.5; continue; }
+      const list = store.glyphs[ch];
+      if (!list || !list.length) continue;
+      const sample = list[0];
+      if (capX + sample.advance > (canvas.width - 2 * MARGIN_X) / PX_PER_CAP) {
+        lineIndex += 1;
+        baselineY = TOP_PAD + m.ascender * PX_PER_CAP + lineIndex * LINE_H * PX_PER_CAP;
+        drawGuides(baselineY, m);
+        capX = 0;
+      }
+      drawSample(sample, capX, baselineY, m);
+      capX += sample.advance;
+    }
+    capX = 0;
+    lineIndex += 1;
+    baselineY = TOP_PAD + m.ascender * PX_PER_CAP + lineIndex * LINE_H * PX_PER_CAP;
+    drawGuides(baselineY, m);
+  }
+}
+
+function fillTable(store) {
+  const body = document.getElementById('rows');
+  const seen = new Set();
+  for (const line of SPECIMEN) for (const ch of line) {
+    if (ch === ' ' || seen.has(ch)) continue;
+    seen.add(ch);
+    const list = store.glyphs[ch] || [];
+    const sample = list[0];
+    const tr = document.createElement('tr');
+    const cls = sample ? (sample.legacyClass || sample.source) : '—';
+    const est = sample && sample.metricsEstimated ? '<span class="warn">estimated</span>' : 'measured';
+    tr.innerHTML = sample
+      ? `<td>${ch}</td><td>${cls}</td><td>${list.length}</td><td>${sample.advance.toFixed(3)}</td>` +
+        `<td>${sample.bounds.top.toFixed(3)}</td><td>${sample.bounds.bottom.toFixed(3)}</td><td>${est}</td>`
+      : `<td>${ch}</td><td colspan="6" class="warn">missing</td>`;
+    body.appendChild(tr);
+  }
+}
+
+(async () => {
+  const metrics = document.getElementById('metrics');
+  try {
+    const res = await fetch('../prototype/handwriting_font.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const store = loadLegacyJson(await res.json());
+    metrics.innerHTML = `Loaded legacy profile: <b>${glyphCount(store)}</b> characters, <b>${totalSamples(store)}</b> variants. ` +
+      `metrics (estimated): x-height <b>${store.metrics.xHeight}</b>, ascender <b>${store.metrics.ascender}</b>, descender <b>${store.metrics.descender}</b>, side bearing <b>${store.metrics.sideBearing}</b>.`;
+    render(store);
+    fillTable(store);
+  } catch (e) {
+    metrics.innerHTML = `<span class="warn">Could not load ../prototype/handwriting_font.json — serve this folder with "node server.mjs". ${e.message}</span>`;
+    render(createStore());
+    fillTable(createStore());
+  }
+})();
+</script>
+</body>
+</html>
