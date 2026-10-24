@@ -45,6 +45,7 @@
 <script type="module">
 import { createStore, glyphCount, totalSamples } from './src/glyphstore.js';
 import { loadLegacyJson } from './src/loaders/legacyJson.js';
+import { fetchDefaultProfile } from './src/defaultprofile.js';
 import { capToPx, PX_PER_CAP } from './src/geometry.js';
 
 const SPECIMEN = ['Handwriting 0123', 'gjpqy AaBb &@#'];
@@ -140,15 +141,15 @@ function fillTable(store) {
 (async () => {
   const metrics = document.getElementById('metrics');
   try {
-    const res = await fetch('../prototype/handwriting_font.json');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const store = loadLegacyJson(await res.json());
+    const obj = await fetchDefaultProfile();
+    if (!obj) throw new Error('no profile file found next to the app');
+    const store = loadLegacyJson(obj);
     metrics.innerHTML = `Loaded legacy profile: <b>${glyphCount(store)}</b> characters, <b>${totalSamples(store)}</b> variants. ` +
       `metrics (estimated): x-height <b>${store.metrics.xHeight}</b>, ascender <b>${store.metrics.ascender}</b>, descender <b>${store.metrics.descender}</b>, side bearing <b>${store.metrics.sideBearing}</b>.`;
     render(store);
     fillTable(store);
   } catch (e) {
-    metrics.innerHTML = `<span class="warn">Could not load ../prototype/handwriting_font.json — serve this folder with "node server.mjs". ${e.message}</span>`;
+    metrics.innerHTML = `<span class="warn">Could not load the default profile (default-profile.json). ${e.message}</span>`;
     render(createStore());
     fillTable(createStore());
   }

@@ -103,6 +103,14 @@ capture. Do not start the speed phase or the image-uploader.
   now spans x 61..691, y 64..864 px on the 794x1123 page (~60 px margin).
 - Unrelated: added a top bar in index.html (Render pages / Capture cursive) and
   the deployment root `_redirects` (`/` -> `/app/`) for Cloudflare Pages.
+- Spec update (2026-10-24): readme section 6.5 "Pair join rules" — Ali's
+  explained real-handwriting join behaviour, now a hard requirement for the
+  cursive filter. One join mechanism for every pair (first's suffix merges
+  with second's prefix); lowercase only; pair table (`gn/ar/re/ye`, y*/*y,
+  g*/*g, p*/*p, q*/*q, b*/t*/l*/d* — reverses included), and `dd` never
+  joins (near-identical subtle-variation repeat). This contradicts the
+  current per-letter "just attach a flick" model and must replace it in a
+  pair-based round after Ali's visual pass.
 
 ## Done — bridge join bugfix (2026-10-24)
 - `src/draw.js` — cursive bridges were rasterized detached from the letters (the
@@ -113,6 +121,47 @@ capture. Do not start the speed phase or the image-uploader.
   advance, so only y is offset. Node check (fake store, word "keep"): after the
   fix every bridge start/end equals the drawn suffix tip / prefix start exactly
   for k->e, e->e, e->p.
+
+## Done — pair join rules (2026-10-24)
+- readme section 6.5 became code. New `src/cursive/pairs.js`: Ali's pair table
+  as data — EXPLICIT (gn/ng ar/ra re/er ye/ey), SOCIAL letters
+  (y g p q b t l d join any lowercase neighbour either side), NEVER ('dd')
+  — and `joinablePair(left, right)` (lowercase-only, blacklist wins).
+- `src/cursive/choose.js`: `chooseForItem` (per-letter prefix/suffix/misc —
+  the "everything joins" model Ali rejected) replaced by
+  `chooseMiscForItem` (misc stays per-letter, table-independent) +
+  `chooseForPair` (per pair: seeded coin in 'partly', suffix required from
+  the LEFT letter, prefix optional on the right; fills both items'
+  cursive records). joinMode/joinPull untouched.
+- `src/layout.js`: per-word pass now does one misc pick per letter, then one
+  pair decision per adjacency; a suffix on letter i exists only when pair
+  (i,i+1) joined, so placeRun's bridge loop and the pull stay direct
+  consequences of the table. Hyphen splits strip the crossing pair's
+  suffix/prefix (nothing joins onto a '-' non-letter anyway).
+- Tests: phase3 suite grown to 43 checks, all pass (pair table unit tests
+  + layout-level: "gn" joins, "dd"/"ss"/"bA" get zero bridges and zero
+  prefix/suffix extras, "the" joins only t->h). PHASE_NOTES updated.
+- One interpretation flagged to Ali: his "reverses are also considered"
+  applied to b/t/l/d too, so `*b`/`*d` etc. join; if he only meant the
+  explicit pairs, delete four chars from SOCIAL and the tests adapt.
+
+## Done — static hosting fix (2026-10-24)
+- Problem: Ali deployed app/ alone to Cloudflare Pages but index/render/debug
+  fetched `../prototype/handwriting_font.json`, a file OUTSIDE the deploy
+  root, so the default profile (and he thought "the server feature") broke.
+  The app is otherwise 100% client-side; only this fetch needed the dev
+  server.
+- Fix: the legacy profile now ships INSIDE the app as `default-profile.json`
+  (copy of prototype/handwriting_font.json, 54 KB); new
+  `src/defaultprofile.js` `fetchDefaultProfile()` tries bundled copy ->
+  ../prototype (dev) -> prototype (assignment-root deploy), first hit wins.
+  All three HTML call sites use it; "serve with node server.mjs" messages
+  replaced. server.mjs stays as the dev convenience only.
+- Note for Ali: his mouse problem -> the capture pages support phone touch/
+  stylus (pointer events), so capture on the deployed site was the plan; with
+  this fix it works there end to end (capture, cursive capture, render, PDF).
+- Deploy recipe: upload ONLY app/ to Cloudflare Pages; root should list
+  app/index.html, _redirects maps / -> /app/.
 
 ## In progress
 - Nothing. Waiting on Ali:

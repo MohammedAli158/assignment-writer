@@ -73,7 +73,7 @@
         <button id="exportBtn">Export store</button>
       </div>
       <input id="importInput" type="file" accept="application/json" hidden>
-      <div class="help" style="margin-top:8px">Run the app with <b>node server.mjs</b> so the bundled file at ../prototype/handwriting_font.json can load.</div>
+      <div class="help" style="margin-top:8px">"Load Ali's legacy font" fetches the bundled default-profile.json, so it also works when the app is deployed as a static site (e.g. Cloudflare Pages).</div>
     </div>
 
     <div class="card">
@@ -87,7 +87,8 @@
 <script type="module">
 import { createCapture } from './src/capture.js';
 import { createStore, addSample, glyphCount, totalSamples, serialize, deserialize } from './src/glyphstore.js';
-import { loadLegacyJson } from './src/loaders/legacyJson.js';
+  import { loadLegacyJson } from './src/loaders/legacyJson.js';
+  import { fetchDefaultProfile } from './src/defaultprofile.js';
 import { fallbackReport } from './src/fallback.js';
 import { saveStore } from './src/persist.js';
 
@@ -157,14 +158,14 @@ $('#clear').onclick = () => capture.clear();
 
 $('#loadLegacy').onclick = async () => {
   try {
-    const res = await fetch('../prototype/handwriting_font.json');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const loaded = loadLegacyJson(await res.json());
+    const obj = await fetchDefaultProfile();
+    if (!obj) throw new Error('no profile file found next to the app');
+    const loaded = loadLegacyJson(obj);
     mergeStore(loaded);
     refresh();
     setStatus(`Loaded ${glyphCount(loaded)} characters / ${totalSamples(loaded)} variants (metrics estimated).`);
   } catch (e) {
-    setStatus('Could not load ../prototype/handwriting_font.json. Serve with "node server.mjs". ' + e.message, true);
+    setStatus('Could not load the default profile (default-profile.json). ' + e.message, true);
   }
 };
 

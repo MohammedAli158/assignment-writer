@@ -12,7 +12,7 @@ import { rngFor, valueNoise1D } from './rng.js';
 import { splitParagraphs, wordsOf } from './text.js';
 import { fallbackAdvance } from './fallback.js';
 import { DEFAULT_GUIDES } from './geometry.js';
-import { joinMode, chooseForItem, joinPull, CURSIVE } from './cursive/choose.js';
+import { joinMode, chooseMiscForItem, chooseForPair, joinPull, CURSIVE } from './cursive/choose.js';
 import { buildBridge } from './cursive/bridge.js';
 
 export const PAGE = {
@@ -153,17 +153,22 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
         }
       }
 
-      // Phase 3 only: cursive picks + the pull of each joined pair, stored on
-      // the item itself so a split fragment carries its own pull.
+      // Phase 3 only: pair-based cursive choices (readme 6.5). Misc extras
+      // are decided per letter; prefix / suffix / the pull of each joined
+      // pair come from the PAIR decision, stored on the items themselves so
+      // a split fragment carries its own pull. A suffix on letter i exists
+      // only when the pair (i, i+1) actually joins, so placeRun's bridge
+      // loop below stays a direct consequence of the pair table.
       if (on) {
         const mode = joinMode(seed, wi, cursive.amount);
         for (let i = 0; i < wordItems.length; i++) {
           if (wordItems[i].kind !== 'glyph') continue;
-          wordItems[i].cursive = chooseForItem(store, word[i], seed, wi, i, mode);
+          wordItems[i].cursive = chooseMiscForItem(store, word[i], seed, wi, i, mode);
         }
         for (let i = 0; i < wordItems.length - 1; i++) {
-          const suffix = wordItems[i].cursive?.suffix;
-          if (suffix && wordItems[i + 1].kind === 'glyph') wordItems[i + 1].pull = joinPull(seed, wi, i, suffix);
+          if (chooseForPair(store, word, wordItems, i, seed, wi, mode)) {
+            wordItems[i + 1].pull = joinPull(seed, wi, i, wordItems[i].cursive.suffix);
+          }
         }
       }
 
@@ -203,6 +208,10 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
         // hyphen), then the rest continues on the next line. A long word can
         // span several lines this way.
         const cut = Math.max(fitCount(rest, avail - BREAK.dashGap - dashW), 1);
+        // The pair crossing the hyphen never joins (nothing joins onto a
+        // hyphen): strip the merge bits both sides chose for it.
+        if (rest[cut - 1]?.cursive) rest[cut - 1].cursive.suffix = null;
+        if (rest[cut]?.cursive) rest[cut].cursive.prefix = null;
         penX += space;
         placeRun(rest.slice(0, cut), wi);
         penX += BREAK.dashGap;

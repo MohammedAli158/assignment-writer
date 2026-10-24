@@ -89,6 +89,7 @@ import { pagesToPdf, A4_PT } from './src/pdf.js';
 import { loadStore } from './src/persist.js';
 import { fallbackReport } from './src/fallback.js';
 import { initCursive } from './src/cursive/store.js';
+import { fetchDefaultProfile } from './src/defaultprofile.js';
 
 const $ = (sel) => document.querySelector(sel);
 const preview = $('#preview');
@@ -158,16 +159,16 @@ function readSpacing() {
 
 async function ensureStore() {
   if (store && glyphCount(store)) { initCursive(store); return; }
-  const res = await fetch('../prototype/handwriting_font.json');
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  store = loadLegacyJson(await res.json());
+  const obj = await fetchDefaultProfile();
+  if (!obj) throw new Error('no profile file found next to the app');
+  store = loadLegacyJson(obj);
 }
 
 async function render() {
   try {
     await ensureStore();
   } catch (e) {
-    $('#warn').textContent = 'No profile. Capture in index.html or serve with "node server.mjs". ' + e.message;
+    $('#warn').textContent = 'No profile. Capture in index.html, or the default profile file (default-profile.json) is missing. ' + e.message;
     return;
   }
   const spacing = readSpacing();

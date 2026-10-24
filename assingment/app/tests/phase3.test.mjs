@@ -206,6 +206,26 @@ const cursiveSample = {
   const off = layoutDocument(store, text, 42, PAGE, SPACING, { enabled: false, amount: 0.6 });
   check('layout: disabled -> identical to Phase 2 stream', JSON.stringify(off.pages) === JSON.stringify(layoutDocument(store, text, 42, PAGE, SPACING, null).pages));
   check('layout: disabled -> no bridges or picks', bdCount(off) === 0 && cvItems(off) === 0);
+
+  // ---------- pair join rules (Ali, readme section 6.5) ----------
+  const { joinablePair } = await import('../src/cursive/pairs.js');
+  check('pairs: exact list joins, both ways', ['gn', 'ng', 'ar', 'ra', 're', 'er', 'ye', 'ey'].every((p) => joinablePair(p[0], p[1])));
+  check('pairs: y g p q b t l d join any lowercase neighbour', ['by', 'yb', 'kg', 'tp', 'yd', 'ly', 'gg', 'qq', 'pp', 'bx', 'xb', 'ld', 'dl'].every((p) => joinablePair(p[0], p[1])));
+  check('pairs: non-social combos stay apart', ['ss', 'xx', 'aa', 'ha', 'eh', 'sx'].every((p) => !joinablePair(p[0], p[1])));
+  check('pairs: dd never joins', !joinablePair('d', 'd'));
+  check('pairs: capitals and non-letters never join', !joinablePair('b', 'X') && !joinablePair('X', 'b') && !joinablePair('d', 'D') && !joinablePair('d', '5') && !joinablePair('.', 'y'));
+
+  // layout level: amount 1 joins exactly the table's pairs
+  const bridgesOf = (w) => layoutDocument(store, w, 42, PAGE, SPACING, { enabled: true, amount: 1 })
+    .pages.flatMap((p) => p.items).filter((it) => it.kind === 'bridge').length;
+  const picksOf = (w) => layoutDocument(store, w, 42, PAGE, SPACING, { enabled: true, amount: 1 })
+    .pages.flatMap((p) => p.items).filter((i) => i.kind === 'glyph');
+  check('layout: "gn" joins (1 bridge, both letters carry the merge)', bridgesOf('gn') === 1 && picksOf('gn').every((i) => i.cursive), `bridges ${bridgesOf('gn')}`);
+  check('layout: "yy" joins (a y pair is always social)', bridgesOf('yy') === 1, `bridges ${bridgesOf('yy')}`);
+  check('layout: "dd" never joins, no suffixed/prefixed letters', bridgesOf('dd') === 0 && picksOf('dd').every((i) => !i.cursive), `bridges ${bridgesOf('dd')}`);
+  check('layout: "ss" stays apart like dd but with no extras at all', bridgesOf('ss') === 0 && picksOf('ss').every((i) => !i.cursive), `bridges ${bridgesOf('ss')}`);
+  check('layout: "bA" stays apart (capital never joins)', bridgesOf('bA') === 0 && picksOf('bA').every((i) => !i.cursive), `bridges ${bridgesOf('bA')}`);
+  check('layout: "the" joins only t->h (h->e is off the table)', bridgesOf('the') === 1, `bridges ${bridgesOf('the')}`);
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall ok');

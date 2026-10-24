@@ -306,9 +306,16 @@ Take `o` in "dog" on some line:
 
 - wrapLines: the per-word stream `rngFor(seed,'word',wi)` picked variant v.
 - `joinMode(seed, wi, amount)` -> e.g. 'full' (stream `rngFor(seed,'joins',wi)`).
-- `chooseForItem(store, 'o', seed, wi, i, 'full')`: fresh streams
-  `rngFor(seed,'curs','pickP'|'pickS'|'pickM', wi, i)` pick one Extra each
-  from `store.cursive.extras['o']`; item.cursive = { prefix, suffix, misc }.
+- `chooseMiscForItem(store, 'o', seed, wi, i, 'full')`: stream
+  `rngFor(seed,'curs','pickM', wi, i)` picks one misc Extra from
+  `store.cursive.extras['o']` (or none) — pair-independent, sets item.cursive.
+- pair (o, next): `chooseForPair(store, word, wordItems, i, seed, wi, 'full')`
+  consults `joinablePair` in pairs.js. Off the table -> the o keeps its base
+  shape: no suffix, no prefix, no bridge — this is the fix for "the output
+  looks unreal straight/everything joins". On the table ->
+  `rngFor(seed,'curs','pickS', wi, i)` fills o.cursive.suffix and
+  `rngFor(seed,'curs','pickP', wi, i+1)` fills next.cursive.prefix; the merge
+  is exactly one mechanism: o's suffix extends into the next letter's entry.
 - placement: before placing the NEXT letter, `joinPull` (stream
   `rngFor(seed,'curs','pull',wi,i)`) pulls penX left by up to 0.22 cap units
   (a function of the suffix's reach, jittered); the wrap test used the same
@@ -339,7 +346,11 @@ Take `o` in "dog" on some line:
   L/R/M, same-flag runs (noise-floored, merged) become Extras with
   rel-points, attach point, reach, length. No randomness, no ML.
 - `src/cursive/choose.js — joinMode weights (full=amount, partly triangle,
-  separate=1-amount), per-letter picks and joinPull. Seeded only.
+  separate=1-amount), misc extras per letter, the PAIR decision (with
+  pairs.js) plus joinPull. Seeded only.
+- `src/cursive/pairs.js — Ali's pair join rules (readme 6.5) as a tiny data
+  table + `joinablePair(left, right)`. This is the file Ali extends freely;
+  the join mechanism itself never gets re-implemented per pair.
 - `src/cursive/bridge.js — the pseudo-straight/bowed connector (Ali's mix),
   endpoints pinned, seeded amplitude and asymmetry.
 - `src/glyphstore.js — deserialize now passes the cursive section through.
@@ -381,15 +392,22 @@ Take `o` in "dog" on some line:
   is, and bodies vary.
 - Extraction smoothing is measure-time only (no Chaikin so measured lengths
   are not fabricated); render-time ink treatment stays humanize.js's job.
+- Pair join rules (Ali, 2026-10-24, readme 6.5): the join is a PAIR decision,
+  never a per-letter one; lowercase only; one merge mechanism
+  (i's suffix -> (i+1)'s prefix, bridged). Table: gn/ng, ar/ra, re/er, ye/ey;
+  y g p q b t l d join any lowercase neighbour either side (reverses included
+  per Ali's "reverses are also considered"); dd NEVER joins — two d's are the
+  same shape written twice with minimal variation. A pair without a stored
+  suffix cannot join even if the table allows it. Hyphen splits strip the
+  crossing pair's suffix/prefix, since nothing joins onto a hyphen.
 
 ## Verification (Node)
 
-- 32-check node suite passed: extraction finds the fixture prefix/suffix and
-  rejects plain in-body samples and jittery dense strokes (still finds the
-  flick after smoothing); wordlist covers all 26 letters; joinMode hits the
-  ends exactly (0 -> separate x all, 1 -> full x all) and mixes all three
-  modes at 0.5; bridge endpoints pinned to 1e-12, bow in [0.003, 0.08], both
-  modes occur; store round-trips cursive through serialize/deserialize.
+- 43-check node suite passed: everything the 32-check suite covered, plus
+  the pair table at unit level (exact list both ways, social letters, dd,
+  capitals/non-letters) and at layout level with amount 1 ("gn" -> 1 bridge
+  with merges on both letters, "dd"/"ss"/"bA" -> zero bridges and zero extras,
+  "the" -> only t->h joins) and joinMode/bridge/store coverage unchanged.
 - layout on Ali's real legacy profile: same seed byte-identical (including
   bridge geometry), different seed differs; bridges emitted with varying
   counts; maximum base ink stays inside the right margin; amount 0 gives
