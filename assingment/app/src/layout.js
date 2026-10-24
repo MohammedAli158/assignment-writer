@@ -48,6 +48,20 @@ function boundedGap(seed, name, index, min, max, scale) {
   return lo + (hi - lo) * (t + 1) / 2;
 }
 
+// Word-overflow behaviour at the right margin, the way handwriting actually
+// does it: when a word does not fit, the writer either moves the whole word to
+// the next line, or writes as much as fits, adds a hyphen, and continues the
+// rest on the next line. When both are plausible, `chance` decides (seeded per
+// word); the min* limits keep either split readable. dashGap is the small gap
+// before the hyphen, in cap units.
+const BREAK = {
+  chance: 0.5,
+  minWord: 4,
+  minFirst: 2,
+  minRest: 2,
+  dashGap: 0.12,
+};
+
 function wordGapAt(seed, index, s) {
   return boundedGap(seed, 'wordgap', index, s.wordMin, s.wordMax, s.wordScale);
 }
@@ -68,11 +82,58 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
   const joinY = (store.metrics?.xHeight || DEFAULT_GUIDES.xHeight) * CURSIVE.joinYFrac;
   const lines = [];
   let wordIndex = 0;
+  let runStamp = 0; // bridge seed index, unique across the document's runs
 
   for (const paragraph of splitParagraphs(text)) {
     let current = [];
     let penX = pageCfg.marginX;
     let needSpace = false;
+
+    // Place a run of items at the pen (bridged pairs sit slightly closer) and
+    // build the bridges between items of the same run. Used both for a whole
+    // word and for the kept part / continuation of a split word.
+    const placeRun = (items, wi) => {
+      for (const item of items) {
+        if (item.pull) penX -= item.pull;
+        item.x = penX;
+        penX += advanceOf(item);
+        current.push(item);
+      }
+      if (!on) return;
+      for (let i = 0; i < items.length - 1; i++) {
+        const item = items[i];
+        const suffix = item.cursive?.suffix;
+        if (!suffix || items[i + 1].kind !== 'glyph') continue;
+        const next = items[i + 1];
+        const tip = suffix.rel[suffix.rel.length - 1];
+        const a = { x: item.x + item.sample.bounds.right + tip.x, y: suffix.attach.y + tip.y };
+        let b;
+        const pre = next.cursive?.prefix;
+        if (pre) {
+          const enter = pre.rel[0];
+          b = { x: next.x + next.sample.bounds.left + enter.x, y: pre.attach.y + enter.y };
+        } else {
+          b = { x: next.x + next.sample.bounds.left, y: joinY };
+        }
+        const points = buildBridge(a, b, seed, wi, runStamp++);
+        if (points) current.push({ kind: 'bridge', points });
+      }
+    };
+
+    // How many leading items of `items` fit inside `avail` cap units (the
+    // first item always counts, so a letter wider than the line cannot stall
+    // the wrap — it just overflows a little, as handwriting would).
+    const fitCount = (items, avail) => {
+      let w = 0;
+      let n = 0;
+      for (const item of items) {
+        const adv = advanceOf(item) - (item.pull || 0);
+        if (n > 0 && w + adv > avail) break;
+        w += adv;
+        n++;
+      }
+      return n;
+    };
 
     for (const word of wordsOf(paragraph)) {
       // Variant choice per character, in word order, from a per-word stream.
@@ -81,22 +142,19 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
       const wi = wordIndex++;
 
       const wordItems = [];
-      let wordW = 0;
       for (let i = 0; i < word.length; i++) {
         const ch = word[i];
         const list = store.glyphs[ch];
         if (list && list.length) {
           const sample = list[Math.floor(rng() * list.length)];
           wordItems.push({ kind: 'glyph', sample });
-          wordW += sample.advance;
         } else {
           wordItems.push({ kind: 'fallback', ch });
-          wordW += fallbackAdvance(ch);
         }
       }
 
-      // Phase 3 only: cursive picks + the pull of each joined pair.
-      const pulls = new Array(wordItems.length).fill(0);
+      // Phase 3 only: cursive picks + the pull of each joined pair, stored on
+      // the item itself so a split fragment carries its own pull.
       if (on) {
         const mode = joinMode(seed, wi, cursive.amount);
         for (let i = 0; i < wordItems.length; i++) {
@@ -105,47 +163,57 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
         }
         for (let i = 0; i < wordItems.length - 1; i++) {
           const suffix = wordItems[i].cursive?.suffix;
-          if (suffix && wordItems[i + 1].kind === 'glyph') pulls[i + 1] = joinPull(seed, wi, i, suffix);
+          if (suffix && wordItems[i + 1].kind === 'glyph') wordItems[i + 1].pull = joinPull(seed, wi, i, suffix);
         }
-        for (const pull of pulls) wordW -= pull;
       }
 
-      const space = current.length && needSpace ? gap : 0;
-      if (current.length && penX + space + wordW > rightEdge) {
+      // The hyphen sample used if this word is split (chosen from the same
+      // per-word stream, so it is deterministic like every other variant).
+      const dashList = store.glyphs['-'];
+      const dash = dashList && dashList.length
+        ? { kind: 'glyph', sample: dashList[Math.floor(rng() * dashList.length)] }
+        : { kind: 'fallback', ch: '-' };
+      const dashW = advanceOf(dash);
+
+      let rest = wordItems;
+      let shifted = false; // the word already moved to a fresh line once
+      while (rest.length) {
+        const space = current.length && needSpace ? gap : 0;
+        const avail = rightEdge - penX - space;
+        const fit = fitCount(rest, avail);
+        if (fit >= rest.length) { penX += space; placeRun(rest, wi); break; }
+
+        // The word overflows. On a line that already has content and that we
+        // have not shifted to yet, the writer chooses: move the word, or
+        // split it with a hyphen (only when both parts stay readable).
+        if (!shifted && current.length) {
+          const splittable = rest.length >= BREAK.minWord && fit >= BREAK.minFirst
+            && rest.length - fit >= BREAK.minRest;
+          if (!(splittable && rngFor(seed, 'break', wi)() < BREAK.chance)) {
+            lines.push({ items: current });
+            current = [];
+            penX = pageCfg.marginX;
+            needSpace = false;
+            shifted = true;
+            continue;
+          }
+        }
+
+        // Split at the line edge: keep what fits (leaving room for the
+        // hyphen), then the rest continues on the next line. A long word can
+        // span several lines this way.
+        const cut = Math.max(fitCount(rest, avail - BREAK.dashGap - dashW), 1);
+        penX += space;
+        placeRun(rest.slice(0, cut), wi);
+        penX += BREAK.dashGap;
+        placeRun([dash], wi);
         lines.push({ items: current });
         current = [];
         penX = pageCfg.marginX;
         needSpace = false;
-      }
-      if (needSpace && current.length) penX += gap;
-      for (let i = 0; i < wordItems.length; i++) {
-        const item = wordItems[i];
-        penX -= pulls[i]; // a bridged pair sits slightly closer
-        item.x = penX;
-        penX += advanceOf(item);
-        current.push(item);
-      }
-
-      // Phase 3 only: bridges from each suffix tip to the next entry point.
-      if (on) {
-        for (let i = 0; i < wordItems.length - 1; i++) {
-          const item = wordItems[i];
-          const suffix = item.cursive?.suffix;
-          if (!suffix || wordItems[i + 1].kind !== 'glyph') continue;
-          const next = wordItems[i + 1];
-          const tip = suffix.rel[suffix.rel.length - 1];
-          const a = { x: item.x + item.sample.bounds.right + tip.x, y: suffix.attach.y + tip.y };
-          let b;
-          const pre = next.cursive?.prefix;
-          if (pre) {
-            const enter = pre.rel[0];
-            b = { x: next.x + next.sample.bounds.left + enter.x, y: pre.attach.y + enter.y };
-          } else {
-            b = { x: next.x + next.sample.bounds.left, y: joinY };
-          }
-          const points = buildBridge(a, b, seed, wi, i);
-          if (points) current.push({ kind: 'bridge', points });
-        }
+        shifted = true;
+        rest = rest.slice(cut);
+        if (rest.length) rest[0] = { ...rest[0], pull: 0 }; // no join across the hyphen
       }
       needSpace = true;
     }

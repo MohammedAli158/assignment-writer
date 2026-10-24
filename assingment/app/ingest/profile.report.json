@@ -1,0 +1,668 @@
+{
+ "drift": {
+  "cap_px": 36,
+  "upper_min": 0.6388888888888888,
+  "upper_max": 1.9722222222222223,
+  "n_upper": 78
+ },
+ "printRows": [
+  {
+   "row": "00",
+   "slope_deg": -1.578824312595253,
+   "resid_cap": 0.12974531450390706,
+   "n": 9,
+   "specks_dropped": 0
+  },
+  {
+   "row": "01",
+   "slope_deg": -1.474105184661382,
+   "resid_cap": 0.07059765680815601,
+   "n": 9,
+   "specks_dropped": 0
+  },
+  {
+   "row": "02",
+   "slope_deg": -0.7037825075228065,
+   "resid_cap": 0.013412956551541115,
+   "n": 3,
+   "specks_dropped": 0
+  },
+  {
+   "row": "03_0",
+   "slope_deg": -4.21942594918266,
+   "resid_cap": 0.08227804870123295,
+   "n": 12,
+   "specks_dropped": 0
+  },
+  {
+   "row": "03_1",
+   "slope_deg": -3.9772932801725083,
+   "resid_cap": 0.05793273419697071,
+   "n": 9,
+   "specks_dropped": 0
+  },
+  {
+   "row": "04",
+   "slope_deg": -2.97471210838715,
+   "resid_cap": 0.06982171712077637,
+   "n": 14,
+   "specks_dropped": 0
+  },
+  {
+   "row": "05",
+   "slope_deg": 0.2569874831439186,
+   "resid_cap": 0.05893729642740897,
+   "n": 7,
+   "specks_dropped": 0
+  },
+  {
+   "row": "06",
+   "slope_deg": -1.6506843794370907,
+   "resid_cap": 0.11135394091544823,
+   "n": 13,
+   "specks_dropped": 0
+  },
+  {
+   "row": "07",
+   "slope_deg": -0.11790528664959861,
+   "resid_cap": 0.10481848365715939,
+   "n": 10,
+   "specks_dropped": 0
+  },
+  {
+   "row": "08",
+   "slope_deg": -0.6079754132293187,
+   "resid_cap": 0.06812749481642459,
+   "n": 11,
+   "specks_dropped": 0
+  },
+  {
+   "row": "09",
+   "slope_deg": 0.7227616700706947,
+   "resid_cap": 0.12652025921439508,
+   "n": 12,
+   "specks_dropped": 0
+  },
+  {
+   "row": "10_0",
+   "slope_deg": 1.2731879296079145,
+   "resid_cap": 0.19126071476588946,
+   "n": 10,
+   "specks_dropped": 0
+  },
+  {
+   "row": "10_1",
+   "slope_deg": 1.1270640240324665,
+   "resid_cap": 0.1826609559875205,
+   "n": 13,
+   "specks_dropped": 0
+  }
+ ],
+ "cap_px": {
+  "print": 36,
+  "cursive": 59
+ },
+ "cursiveMeta": {
+  "a": [
+   {
+    "row": 0,
+    "word": "lazy",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "lazy",
+    "idx": 1,
+    "conf": 0.761022557736071,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "lazy",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "b": [
+   {
+    "row": 0,
+    "word": "brown",
+    "idx": 0,
+    "conf": 0.9716284868672528,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "brown",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "brown",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "c": [
+   {
+    "row": 0,
+    "word": "quick",
+    "idx": 3,
+    "conf": 0.7760661908540407,
+    "overhang": 0.1864406779661017
+   },
+   {
+    "row": 1,
+    "word": "quick",
+    "idx": 3,
+    "conf": 0.31841640671046045,
+    "overhang": 0
+   }
+  ],
+  "d": [
+   {
+    "row": 0,
+    "word": "dog",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0.22033898305084745
+   },
+   {
+    "row": 1,
+    "word": "dog",
+    "idx": 0,
+    "conf": 0.7886854421751717,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "dog",
+    "idx": 0,
+    "conf": 0.761022557736071,
+    "overhang": 0
+   }
+  ],
+  "e": [
+   {
+    "row": 0,
+    "word": "over",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0.13559322033898305
+   },
+   {
+    "row": 1,
+    "word": "The",
+    "idx": 2,
+    "conf": 0.8163483266142724,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "over",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "f": [
+   {
+    "row": 0,
+    "word": "fox",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "fox",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "fox",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0.1694915254237288
+   }
+  ],
+  "g": [],
+  "h": [
+   {
+    "row": 0,
+    "word": "The",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "The",
+    "idx": 1,
+    "conf": 0.6503710199796684,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "The",
+    "idx": 1,
+    "conf": 0.6780339044187689,
+    "overhang": 0
+   }
+  ],
+  "i": [
+   {
+    "row": 0,
+    "word": "quick",
+    "idx": 2,
+    "conf": 0.9390347708650507,
+    "overhang": 0.13559322033898305
+   },
+   {
+    "row": 1,
+    "word": "quick",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0.11864406779661017
+   },
+   {
+    "row": 2,
+    "word": "quick",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "j": [
+   {
+    "row": 0,
+    "word": "jumps",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0.15254237288135594
+   },
+   {
+    "row": 1,
+    "word": "jumps",
+    "idx": 0,
+    "conf": 0.9823256332488762,
+    "overhang": 0.23728813559322035
+   },
+   {
+    "row": 2,
+    "word": "jumps",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0.23728813559322035
+   }
+  ],
+  "k": [
+   {
+    "row": 0,
+    "word": "quick",
+    "idx": 4,
+    "conf": 0.7760661908540407,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "quick",
+    "idx": 4,
+    "conf": 0.31841640671046045,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "quick",
+    "idx": 4,
+    "conf": 0.37374217558866163,
+    "overhang": 0
+   }
+  ],
+  "l": [
+   {
+    "row": 1,
+    "word": "lazy",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "m": [
+   {
+    "row": 0,
+    "word": "jumps",
+    "idx": 2,
+    "conf": 0.9716284868672528,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "jumps",
+    "idx": 2,
+    "conf": 0.8163483266142724,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "jumps",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0.13559322033898305
+   }
+  ],
+  "n": [
+   {
+    "row": 0,
+    "word": "brown",
+    "idx": 4,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "brown",
+    "idx": 4,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "brown",
+    "idx": 4,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "o": [
+   {
+    "row": 0,
+    "word": "dog",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "brown",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "brown",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "p": [
+   {
+    "row": 0,
+    "word": "jumps",
+    "idx": 3,
+    "conf": 0.9064410548628488,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "jumps",
+    "idx": 3,
+    "conf": 0.8163483266142724,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "jumps",
+    "idx": 3,
+    "conf": 0.9269998643706749,
+    "overhang": 0
+   }
+  ],
+  "q": [
+   {
+    "row": 0,
+    "word": "quick",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "quick",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "quick",
+    "idx": 0,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "r": [
+   {
+    "row": 0,
+    "word": "over",
+    "idx": 3,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "over",
+    "idx": 3,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "brown",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "s": [
+   {
+    "row": 0,
+    "word": "jumps",
+    "idx": 4,
+    "conf": 0.9064410548628488,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "jumps",
+    "idx": 4,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "jumps",
+    "idx": 4,
+    "conf": 0.9269998643706749,
+    "overhang": 0
+   }
+  ],
+  "t": [],
+  "u": [
+   {
+    "row": 0,
+    "word": "quick",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "quick",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "quick",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "v": [
+   {
+    "row": 0,
+    "word": "over",
+    "idx": 1,
+    "conf": 0.9716284868672528,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "over",
+    "idx": 1,
+    "conf": 0.7056967888578697,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "over",
+    "idx": 1,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "w": [
+   {
+    "row": 0,
+    "word": "brown",
+    "idx": 3,
+    "conf": 0.9716284868672528,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "brown",
+    "idx": 3,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "brown",
+    "idx": 3,
+    "conf": 1,
+    "overhang": 0
+   }
+  ],
+  "x": [
+   {
+    "row": 0,
+    "word": "fox",
+    "idx": 2,
+    "conf": 0.9390347708650507,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "fox",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "fox",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0.13559322033898305
+   }
+  ],
+  "y": [
+   {
+    "row": 0,
+    "word": "lazy",
+    "idx": 3,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "lazy",
+    "idx": 3,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "lazy",
+    "idx": 3,
+    "conf": 1,
+    "overhang": 0.2033898305084746
+   }
+  ],
+  "z": [
+   {
+    "row": 0,
+    "word": "lazy",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0
+   },
+   {
+    "row": 1,
+    "word": "lazy",
+    "idx": 2,
+    "conf": 0.761022557736071,
+    "overhang": 0
+   },
+   {
+    "row": 2,
+    "word": "lazy",
+    "idx": 2,
+    "conf": 1,
+    "overhang": 0
+   }
+  ]
+ },
+ "missing": {
+  "c": [
+   2
+  ],
+  "g": [
+   0,
+   1,
+   2
+  ],
+  "l": [
+   0,
+   2
+  ],
+  "t": [
+   0,
+   1,
+   2
+  ]
+ },
+ "warnings": [
+  "no page quad found; deskewed by -1.75 deg. Residual perspective error stays in the data.",
+  "cursive 'c' missing in pangram row(s) [2]",
+  "cursive 'g' missing in pangram row(s) [0, 1, 2]",
+  "cursive 'l' missing in pangram row(s) [0, 2]",
+  "cursive 't' missing in pangram row(s) [0, 1, 2]",
+  "low-confidence ligature cut: pangram-2 'quick' cut after letter 3 ('c'|'k') confidence 0.32",
+  "low-confidence ligature cut: pangram-3 'quick' cut after letter 3 ('c'|'k') confidence 0.37"
+ ]
+}

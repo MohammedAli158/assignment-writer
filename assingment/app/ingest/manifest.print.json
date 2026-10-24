@@ -1,0 +1,91 @@
+{
+ "kind": "print",
+ "margin_frac": 0.02,
+ "rows": {
+  "0": {
+   "content": "lower",
+   "chars": "abcdefghijk",
+   "hints": {
+    "drop": [
+     0
+    ]
+   }
+  },
+  "1": {
+   "content": "lower",
+   "chars": "lmnopqrstuv",
+   "hints": {
+    "drop": [
+     0
+    ]
+   }
+  },
+  "2": {
+   "content": "lower",
+   "chars": "wxyz"
+  },
+  "3": [
+   {
+    "content": "lower",
+    "chars": "abcdefghijklmn"
+   },
+   {
+    "content": "lower",
+    "chars": "opqrstuvwxyz",
+    "hints": {
+     "drop": [
+      0
+     ]
+    }
+   }
+  ],
+  "4": {
+   "content": "lower",
+   "chars": "abcdefghijklmnopqr",
+   "hints": {
+    "merge": [
+     [
+      8,
+      9
+     ]
+    ]
+   }
+  },
+  "5": {
+   "content": "lower",
+   "chars": "stuvwxyz"
+  },
+  "6": {
+   "content": "upper",
+   "chars": "ABCDEFGHIJKLMNO"
+  },
+  "7": {
+   "content": "upper",
+   "chars": "PQRSTUVWXYZ"
+  },
+  "8": {
+   "content": "upper",
+   "chars": "ABCDEFGHIJKLM"
+  },
+  "9": {
+   "content": "upper",
+   "chars": "NOPQRSTUVWXYZ",
+   "hints": {
+    "drop": [
+     13
+    ]
+   }
+  },
+  "10": [
+   {
+    "content": "upper",
+    "chars": "ABCDEFGHIJKL"
+   },
+   {
+    "content": "upper",
+    "chars": "MNOPQRSTUVWXYZ"
+   }
+  ]
+ },
+ "_note": "hints index the groups drawn in rows/row_NN.png BEFORE hints are applied; edit and rerun"
+}

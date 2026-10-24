@@ -1,0 +1,11 @@
+{
+  "kind": "pangram",
+  "level": true,
+  "text": "The quick brown fox jumps over a lazy dog",
+  "width_prior": "raw-print.json",
+  "rows": {
+    "0": {"content": "ignore"},
+    "1": [{"content": "pangram-1"}, {"content": "pangram-2"}],
+    "2": {"content": "pangram-3"}
+  }
+}

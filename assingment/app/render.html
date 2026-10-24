@@ -53,6 +53,12 @@ gjpqy hang below the baseline; AaBb 0123 sit on it.</textarea>
     </div>
 
     <div class="quad">
+      <div><label for="size">Handwriting size (px per cap height)</label><input id="size" type="number" step="1" min="12" max="96"></div>
+      <div><label for="sizeAdj">Adjust size</label><input id="sizeAdj" type="range" min="12" max="96" step="1" style="padding:0;background:transparent;border:0"></div>
+      <div><label for="inkW">Ink thickness (px)</label><input id="inkW" type="number" step="0.1" min="0.3" max="8"></div>
+      <div><label for="inkWAdj">Adjust thickness</label><input id="inkWAdj" type="range" min="0.3" max="8" step="0.1" style="padding:0;background:transparent;border:0"></div>
+    </div>
+    <div class="quad">
       <div><label for="wordMin">Word gap min</label><input id="wordMin" type="number" step="0.05" min="0"></div>
       <div><label for="wordMax">Word gap max</label><input id="wordMax" type="number" step="0.05" min="0"></div>
       <div><label for="lineMin">Line gap min</label><input id="lineMin" type="number" step="0.05" min="0"></div>
@@ -103,6 +109,25 @@ $('#wordMax').value = SPACING.wordMax;
 $('#lineMin').value = SPACING.lineMin;
 $('#lineMax').value = SPACING.lineMax;
 
+// Handwriting size = pixels per cap-height unit on the page. Layout is done in
+// cap units, so a smaller size does not just shrink the glyphs: the same page
+// holds more cap units, so more words fit per line (and fewer pages overall) —
+// exactly how a real page behaves when someone writes smaller.
+$('#size').value = PAGE.capPx;
+$('#sizeAdj').value = PAGE.capPx;
+// Ink thickness in pixels on the page (the canvas is 96dpi A4, so px is px
+// when printed). Thin values (~0.8-1.2) read like a ballpoint pen.
+const INK_W_DEFAULT = 2.2;
+$('#inkW').value = INK_W_DEFAULT;
+$('#inkWAdj').value = INK_W_DEFAULT;
+const pageSize = () => {
+  const capPx = Math.min(96, Math.max(12, Number($('#size').value) || PAGE.capPx));
+  return { ...PAGE, capPx };
+};
+const readInkWidth = () => Math.min(8, Math.max(0.3, Number($('#inkW').value) || INK_W_DEFAULT));
+const syncSize = () => { $('#sizeAdj').value = $('#size').value; };
+const syncInkW = () => { $('#inkWAdj').value = $('#inkW').value; };
+
 let toastTimer;
 function toast(message) {
   const el = $('#toast');
@@ -147,20 +172,26 @@ async function render() {
   }
   const spacing = readSpacing();
   if (!spacing) return; // a toast already explained what is wrong
+  const pageCfg = pageSize();
   const text = $('#text').value;
   const seed = Number($('#seed').value) || 1;
-  const doc = layoutDocument(store, text, seed, PAGE, spacing, readCursive());
+  const doc = layoutDocument(store, text, seed, pageCfg, spacing, readCursive());
 
   preview.textContent = '';
   canvases = doc.pages.map((page, pageIndex) => {
-    const canvas = drawPage(page, PAGE, { ink: $('#ink').value, seed, pageIndex });
+    const canvas = drawPage(page, pageCfg, {
+      ink: $('#ink').value,
+      seed,
+      pageIndex,
+      inkWidth: readInkWidth(),
+    });
     canvas.className = 'page';
     preview.appendChild(canvas);
     return canvas;
   });
 
   const report = fallbackReport(store, text);
-  $('#stats').innerHTML = `pages <b>${doc.pages.length}</b> · lines <b>${doc.lineCount}</b> · ` +
+  $('#stats').innerHTML = `pages <b>${doc.pages.length}</b> · lines <b>${doc.lineCount}</b> · size <b>${pageCfg.capPx}px/cap</b> · ink <b>${readInkWidth()}px</b> · ` +
     `glyphs in profile <b>${glyphCount(store)}</b> (${totalSamples(store)} variants) · seed <b>${seed}</b> · cursive <b>${doc.cursive.enabled ? Math.round(doc.cursive.amount * 100) + '%' : 'off'}</b>`;
   $('#warn').innerHTML = report.message +
     (doc.cursive.enabled && !(store.cursive && Object.keys(store.cursive.extras || {}).length)
@@ -172,6 +203,16 @@ async function render() {
 $('#render').onclick = render;
 ['wordMin', 'wordMax', 'lineMin', 'lineMax'].forEach((id) => {
   $('#' + id).addEventListener('change', readSpacing); // toast as soon as max <= min
+});
+$('#size').addEventListener('change', () => { syncSize(); render(); });
+$('#sizeAdj').addEventListener('input', () => {
+  $('#size').value = $('#sizeAdj').value; // slider and number box stay in step
+  render();
+});
+$('#inkW').addEventListener('change', () => { syncInkW(); render(); });
+$('#inkWAdj').addEventListener('input', () => {
+  $('#inkW').value = $('#inkWAdj').value; // slider and number box stay in step
+  render();
 });
 ['cursiveOn', 'cursiveAmt'].forEach((id) => {
   $('#' + id).addEventListener('change', render);

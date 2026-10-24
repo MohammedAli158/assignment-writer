@@ -93,6 +93,27 @@ capture. Do not start the speed phase or the image-uploader.
   from 40/354 to 11/354 by measuring against the union envelope of all
   variants (micro runs with reach < 0.04 are dropped as noise).
 
+## Done — render bugfix (2026-10-23)
+- `src/draw.js` — base glyphs were rasterized at the page origin. Stored strokes
+  are relative to the pen position (origin x = item.x, baseline = item.y), but
+  `strokePolylines` drew them untranslated, so all print ink piled up clipped at
+  the bottom-left; only cursive extras/bridges (already absolute) were visible.
+  Fix: `strokePolylines(polylines, dx, dy)`; glyph items pass `item.x, item.y`,
+  extras and bridges stay at 0,0. Node check on Ali's legacy profile: glyph ink
+  now spans x 61..691, y 64..864 px on the 794x1123 page (~60 px margin).
+- Unrelated: added a top bar in index.html (Render pages / Capture cursive) and
+  the deployment root `_redirects` (`/` -> `/app/`) for Cloudflare Pages.
+
+## Done — bridge join bugfix (2026-10-24)
+- `src/draw.js` — cursive bridges were rasterized detached from the letters (the
+  joins in e.g. "keep" disappeared). Bridge points are baseline-relative (same
+  frame as glyph strokes), but were drawn untranslated: `strokePolylines` passed
+  dx=dy=0, so the connector sat a whole baseline below the ink. Fix: bridges now
+  draw at `(points, 0, item.y)` — their stored x already contains the line's
+  advance, so only y is offset. Node check (fake store, word "keep"): after the
+  fix every bridge start/end equals the drawn suffix tip / prefix start exactly
+  for k->e, e->e, e->p.
+
 ## In progress
 - Nothing. Waiting on Ali:
   1. Visual pass of cursive.html and of render.html's cursive output
