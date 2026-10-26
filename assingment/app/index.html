@@ -6,34 +6,46 @@
 <title>Handwrite — Capture (prerequisite)</title>
 <style>
   :root{--bg:#0b0d16;--card:#141827;--line:rgba(148,163,184,.16);--text:#eef2f8;--muted:#9aa7bd;--accent:#7c3aed}
-  *{box-sizing:border-box;margin:0;padding:0}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   body{font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:22px;line-height:1.45}
   h1{font-size:1.25rem;letter-spacing:-.02em;margin-bottom:2px}
   .sub{color:var(--muted);font-size:.78rem;margin-bottom:18px}
   .wrap{display:grid;grid-template-columns:1fr 320px;gap:18px;max-width:1280px;margin:auto;align-items:start}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
   .side{display:flex;flex-direction:column;gap:14px}
-  canvas{width:100%;height:auto;border-radius:10px;touch-action:none;cursor:crosshair;display:block}
+  canvas{width:100%;height:auto;border-radius:10px;touch-action:none;cursor:crosshair;display:block;-webkit-user-select:none;user-select:none}
   label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin-bottom:6px}
-  input,textarea{width:100%;background:#0d1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit}
-  .char{text-align:center;font-size:1.3rem;font-weight:800}
-  button{cursor:pointer;border:0;border-radius:9px;padding:9px 13px;font:inherit;font-weight:700;color:#fff;background:#2a3350}
+  input,textarea{width:100%;background:#0d1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:1rem;min-height:44px}
+  .char{text-align:center;font-size:1.5rem;font-weight:800}
+  button{cursor:pointer;border:0;border-radius:9px;padding:11px 15px;min-height:44px;font:inherit;font-weight:700;color:#fff;background:#2a3350;touch-action:manipulation}
   button.primary{background:linear-gradient(135deg,#6366f1,#7c3aed)}
   button.bad{background:rgba(239,68,68,.16);color:#fca5a5}
-  .btn{display:inline-block;cursor:pointer;border:0;border-radius:9px;padding:9px 13px;font:inherit;font-weight:700;color:#fff;background:#2a3350;text-decoration:none}
+  .btn{display:inline-block;cursor:pointer;border:0;border-radius:9px;padding:11px 15px;min-height:44px;font:inherit;font-weight:700;color:#fff;background:#2a3350;text-decoration:none;touch-action:manipulation}
   .btn.primary{background:linear-gradient(135deg,#6366f1,#7c3aed)}
   .topbar{max-width:1280px;margin:0 auto 14px;display:flex;gap:8px;flex-wrap:wrap}
   .row{display:flex;gap:8px;flex-wrap:wrap}
   .stats{font-size:.8rem;color:var(--muted)}
   .stats b{color:var(--text)}
-  .palette{display:grid;grid-template-columns:repeat(9,1fr);gap:4px;margin-top:6px}
-  .p{aspect-ratio:1;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--muted);font-weight:700;padding:0}
+  .palette{display:grid;grid-template-columns:repeat(auto-fill,minmax(42px,1fr));gap:5px;margin-top:6px;max-height:240px;overflow:auto;padding:2px}
+  .p{aspect-ratio:1;min-height:42px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--muted);font-weight:700;padding:0}
   .p:hover{color:#fff}
   .p.sel{border-color:var(--accent);color:#fff;background:rgba(124,58,237,.22)}
   .msg{font-size:.76rem;color:#9fe6c6;min-height:1.1em}
   .warn{color:#f5c07a}
   .help{font-size:.72rem;color:var(--muted)}
   @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  @media(max-width:640px){
+    body{padding:12px}
+    h1{font-size:1.15rem}
+    .sub{font-size:.84rem;margin-bottom:12px}
+    .card{padding:12px;border-radius:12px}
+    .wrap,.side{gap:12px}
+    .row button{flex:1 1 auto;min-width:96px}
+    .topbar .btn{flex:1 1 auto;text-align:center}
+    .palette{max-height:200px}
+    .help{font-size:.78rem}
+    .msg{font-size:.8rem}
+  }
 </style>
 </head>
 <body>
@@ -46,7 +58,7 @@
     <h1>Capture handwriting</h1>
     <div class="sub">Write each character inside the guides. Capitals reach the top (ascender) line, lowercase sit between the x-height and baseline lines, descenders drop to the bottom line. Stroke points are stored raw, with time and pressure. Saved samples are kept in this browser for the <a href="render.html" style="color:#a5b4fc">render page</a>.</div>
     <div class="sub" style="margin:-12px 0 18px"><b style="color:#c7d2fe">Cursive support:</b> <a href="cursive.html" style="color:#a5b4fc">capture your cursive letter extras (entry/exit strokes) →</a></div>
-    <canvas id="cap" width="1000" height="360"></canvas>
+    <canvas id="cap" width="1000" height="600"></canvas>
     <div class="row" style="margin-top:12px">
       <button id="undo">Undo stroke</button>
       <button id="clear" class="bad">Clear</button>

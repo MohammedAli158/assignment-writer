@@ -6,32 +6,46 @@
 <title>Handwrite — Render (Phase 1)</title>
 <style>
   :root{--bg:#0b0d16;--card:#141827;--line:rgba(148,163,184,.16);--text:#eef2f8;--muted:#9aa7bd;--accent:#7c3aed}
-  *{box-sizing:border-box;margin:0;padding:0}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   body{font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:22px;line-height:1.45}
   h1{font-size:1.25rem;letter-spacing:-.02em;margin-bottom:2px}
   .sub{color:var(--muted);font-size:.78rem;margin-bottom:18px}
   .wrap{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:18px;max-width:1280px;margin:auto;align-items:start}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
   label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin-bottom:6px}
-  textarea,input{width:100%;background:#0d1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit}
+  textarea,input{width:100%;background:#0d1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:1rem;min-height:44px}
   textarea{min-height:200px;resize:vertical}
-  button{cursor:pointer;border:0;border-radius:9px;padding:10px 14px;font:inherit;font-weight:700;color:#fff;background:#2a3350}
+  button{cursor:pointer;border:0;border-radius:9px;padding:11px 15px;min-height:44px;font:inherit;font-weight:700;color:#fff;background:#2a3350;touch-action:manipulation}
   button.primary{background:linear-gradient(135deg,#6366f1,#7c3aed)}
   button:disabled{opacity:.45;cursor:not-allowed}
-  .row{display:flex;gap:10px;align-items:flex-end;margin-top:12px}
+  .row{display:flex;gap:10px;align-items:flex-end;margin-top:12px;flex-wrap:wrap}
   .row > div{flex:1}
   .row .small{flex:0 0 120px}
   .stats{font-size:.8rem;color:var(--muted);margin-top:10px}
   .stats b{color:var(--text)}
   .warn{color:#f5c07a;font-size:.78rem;min-height:1.1em}
-  .pages{display:flex;flex-direction:column;align-items:center;gap:16px;max-height:calc(100vh - 80px);overflow:auto;padding:6px}
+  .pages{display:flex;flex-direction:column;align-items:center;gap:16px;max-height:calc(100vh - 80px);max-height:calc(100dvh - 80px);overflow:auto;padding:6px}
   .page{display:block;width:100%;max-width:794px;height:auto;background:#fff;box-shadow:0 6px 24px rgba(0,0,0,.35);border-radius:2px}
   a.link{color:#a5b4fc;font-size:.78rem}
   .quad{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  .quad input[type=range]{accent-color:#7c3aed}
   #toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);background:#3b1d1d;border:1px solid #b45454;color:#ffd9d9;
-    padding:11px 16px;border-radius:10px;font-size:.85rem;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:.18s;z-index:50}
+    padding:11px 16px;border-radius:10px;font-size:.85rem;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:.18s;z-index:50;max-width:calc(100vw - 32px);text-align:center}
   #toast.show{opacity:1;transform:translate(-50%,0)}
-  @media(max-width:960px){.wrap{grid-template-columns:1fr}}
+  @media(max-width:960px){.wrap{grid-template-columns:1fr}.pages{max-height:none;overflow:visible;padding:0}}
+  @media(max-width:640px){
+    body{padding:12px}
+    h1{font-size:1.15rem}
+    .sub{font-size:.84rem;margin-bottom:12px}
+    .card{padding:12px;border-radius:12px}
+    .wrap{gap:12px}
+    .row > div{flex:1 1 130px}
+    .row .small{flex:1 1 120px}
+    .row button{width:100%}
+    .quad{gap:8px}
+    textarea{min-height:150px}
+    .stats{font-size:.76rem}
+  }
 </style>
 </head>
 <body>

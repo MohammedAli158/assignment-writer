@@ -7,16 +7,17 @@
 import { PX_PER_CAP, DEFAULT_GUIDES, pxToCap } from './geometry.js';
 import { normalizeToBaseline } from './advance.js';
 
-const CANVAS_W = 1000;
-const CANVAS_H = 360;
 const MARGIN_X = 60; // left ink margin, px
-const TOP_PAD = 40;  // gap above the ascender guide, px
 const INK = '#17243b';
 
 export function createCapture(canvas, options = {}) {
   const guides = { ...DEFAULT_GUIDES, ...(options.guides || {}) };
   const pxPerCap = options.pxPerCap || PX_PER_CAP;
   const sideBearing = options.sideBearing ?? 0.08;
+
+  const CANVAS_W = canvas.width || 1000;
+  const CANVAS_H = canvas.height || 600;
+  const TOP_PAD = Math.round(CANVAS_H * 0.2);
 
   const ctx = canvas.getContext('2d');
   const baselineY = TOP_PAD + guides.ascender * pxPerCap;

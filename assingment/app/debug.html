@@ -13,14 +13,22 @@
   .wrap{max-width:1080px;margin:auto;display:flex;flex-direction:column;gap:16px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
   canvas{width:100%;height:auto;border-radius:10px;background:#fbfcfd;display:block}
+  .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
   table{width:100%;border-collapse:collapse;font-size:.78rem}
-  th,td{text-align:right;padding:5px 7px;border-bottom:1px solid var(--line)}
+  th,td{text-align:right;padding:5px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
   th{color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:.66rem}
   .note{color:var(--muted);font-size:.75rem}
   .warn{color:#f5c07a}
   .metrics{font-size:.78rem;color:var(--muted);margin-top:8px}
   .metrics b{color:var(--text)}
+  @media(max-width:640px){
+    body{padding:12px}
+    h1{font-size:1.1rem}
+    .sub{font-size:.82rem}
+    .card{padding:12px;border-radius:12px}
+    .wrap{gap:12px}
+  }
 </style>
 </head>
 <body>
@@ -28,17 +36,19 @@
   <div class="card">
     <h1>Prerequisite debug page — glyph store</h1>
     <div class="sub">Fixed specimen placed left-to-right by advance width through the guide lines (baseline, x-height, ascender, descender). This is NOT Phase 1: no randomness, no wrapping rules of the final renderer — it exists only to show that stored size, position and descenders survive.</div>
-    <canvas id="view" width="1000" height="620"></canvas>
+    <canvas id="view" width="1000" height="680"></canvas>
     <div class="metrics" id="metrics"></div>
   </div>
 
   <div class="card">
     <h1>Measured numbers</h1>
     <div class="sub">advance and vertical extents are in cap-height units (capital height = 1.0, baseline = 0, descenders negative).</div>
-    <table>
-      <thead><tr><th>Char</th><th>Class</th><th>Samples</th><th>Advance</th><th>Top</th><th>Bottom</th><th>Metrics</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Char</th><th>Class</th><th>Samples</th><th>Advance</th><th>Top</th><th>Bottom</th><th>Metrics</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
