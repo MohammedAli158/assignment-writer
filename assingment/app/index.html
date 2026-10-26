@@ -87,10 +87,11 @@
 <script type="module">
 import { createCapture } from './src/capture.js';
 import { createStore, addSample, glyphCount, totalSamples, serialize, deserialize } from './src/glyphstore.js';
-  import { loadLegacyJson } from './src/loaders/legacyJson.js';
-  import { fetchDefaultProfile } from './src/defaultprofile.js';
+   import { loadLegacyJson } from './src/loaders/legacyJson.js';
+   import { fetchDefaultProfile } from './src/defaultprofile.js';
 import { fallbackReport } from './src/fallback.js';
-import { saveStore } from './src/persist.js';
+import { saveStore, loadStore } from './src/persist.js';
+import { mergeCursive } from './src/cursive/store.js';
 
 const $ = (sel) => document.querySelector(sel);
 const store = createStore();
@@ -160,10 +161,18 @@ $('#loadLegacy').onclick = async () => {
   try {
     const obj = await fetchDefaultProfile();
     if (!obj) throw new Error('no profile file found next to the app');
-    const loaded = loadLegacyJson(obj);
-    mergeStore(loaded);
-    refresh();
-    setStatus(`Loaded ${glyphCount(loaded)} characters / ${totalSamples(loaded)} variants (metrics estimated).`);
+    if (obj.glyphs) {
+      const loaded = deserialize(JSON.stringify(obj));
+      mergeStore(loaded);
+      mergeCursive(store, loaded);
+      refresh();
+      setStatus(`Loaded the bundled glyph store: ${glyphCount(loaded)} characters, cursive included.`);
+    } else {
+      const loaded = loadLegacyJson(obj);
+      mergeStore(loaded);
+      refresh();
+      setStatus(`Loaded ${glyphCount(loaded)} characters / ${totalSamples(loaded)} variants (metrics estimated).`);
+    }
   } catch (e) {
     setStatus('Could not load the default profile (default-profile.json). ' + e.message, true);
   }
@@ -194,6 +203,30 @@ $('#exportBtn').onclick = () => {
 
 $('#checkText').oninput = checkMissing;
 refresh();
+
+// Open with everything by default: the persisted store if there is one,
+// otherwise the bundled default profile (new glyph-store or legacy shape).
+(async () => {
+  const saved = loadStore();
+  if (saved && glyphCount(saved)) {
+    mergeStore(saved);
+    mergeCursive(store, saved);
+    refresh();
+    return;
+  }
+  try {
+    const obj = await fetchDefaultProfile();
+    if (!obj) return;
+    if (obj.glyphs) {
+      const loaded = deserialize(JSON.stringify(obj));
+      mergeStore(loaded);
+      mergeCursive(store, loaded);
+    } else {
+      mergeStore(loadLegacyJson(obj));
+    }
+    refresh();
+  } catch { /* offline/missing file: start empty */ }
+})();
 </script>
 </body>
 </html>

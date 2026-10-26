@@ -43,7 +43,7 @@
 </div>
 
 <script type="module">
-import { createStore, glyphCount, totalSamples } from './src/glyphstore.js';
+import { createStore, deserialize, glyphCount, totalSamples } from './src/glyphstore.js';
 import { loadLegacyJson } from './src/loaders/legacyJson.js';
 import { fetchDefaultProfile } from './src/defaultprofile.js';
 import { capToPx, PX_PER_CAP } from './src/geometry.js';
@@ -143,7 +143,7 @@ function fillTable(store) {
   try {
     const obj = await fetchDefaultProfile();
     if (!obj) throw new Error('no profile file found next to the app');
-    const store = loadLegacyJson(obj);
+    const store = obj.glyphs ? deserialize(JSON.stringify(obj)) : loadLegacyJson(obj);
     metrics.innerHTML = `Loaded legacy profile: <b>${glyphCount(store)}</b> characters, <b>${totalSamples(store)}</b> variants. ` +
       `metrics (estimated): x-height <b>${store.metrics.xHeight}</b>, ascender <b>${store.metrics.ascender}</b>, descender <b>${store.metrics.descender}</b>, side bearing <b>${store.metrics.sideBearing}</b>.`;
     render(store);

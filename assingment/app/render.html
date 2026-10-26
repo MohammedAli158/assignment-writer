@@ -80,7 +80,7 @@ gjpqy hang below the baseline; AaBb 0123 sit on it.</textarea>
 <div id="toast" role="status" aria-live="polite"></div>
 
 <script type="module">
-import { glyphCount, totalSamples } from './src/glyphstore.js';
+import { deserialize, glyphCount, totalSamples } from './src/glyphstore.js';
 import { loadLegacyJson } from './src/loaders/legacyJson.js';
 import { layoutDocument, PAGE, SPACING } from './src/layout.js';
 import { CURSIVE_DEFAULTS } from './src/cursive/choose.js';
@@ -88,7 +88,7 @@ import { drawPage } from './src/draw.js';
 import { pagesToPdf, A4_PT } from './src/pdf.js';
 import { loadStore } from './src/persist.js';
 import { fallbackReport } from './src/fallback.js';
-import { initCursive } from './src/cursive/store.js';
+import { initCursive, mergeCursive } from './src/cursive/store.js';
 import { fetchDefaultProfile } from './src/defaultprofile.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -158,10 +158,18 @@ function readSpacing() {
 }
 
 async function ensureStore() {
-  if (store && glyphCount(store)) { initCursive(store); return; }
+  const hasCursive = () =>
+    store && Object.keys(store.cursive?.samples || {}).length > 0;
+  if (store && glyphCount(store) && hasCursive()) { initCursive(store); return; }
   const obj = await fetchDefaultProfile();
-  if (!obj) throw new Error('no profile file found next to the app');
-  store = loadLegacyJson(obj);
+  if (!store || !glyphCount(store)) {
+    if (!obj) throw new Error('no profile file found next to the app');
+    // The bundled default can be a glyph store (with cursive) or legacy shape.
+    store = obj.glyphs ? deserialize(JSON.stringify(obj)) : loadLegacyJson(obj);
+  }
+  initCursive(store);
+  // A persisted store predating the cursive capture still gets the joins.
+  if (obj?.cursive && !hasCursive()) mergeCursive(store, obj);
 }
 
 async function render() {

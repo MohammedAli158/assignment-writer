@@ -2,7 +2,9 @@
 // (default-profile.json next to this app) wherever the app is hosted —
 // a static host like Cloudflare Pages included — falling back to the
 // prototype folder when developing with server.mjs. Returns the raw JSON
-// object or null; callers decide how the shape is parsed/merged.
+// object or null; callers decide how the shape is parsed/merged. The bundled
+// default is a serialized glyph store (glyphs + cursive section); callers
+// treat a legacy shape (no .glyphs) as the prototype fallback's format.
 // Called by index.html, debug.html and render.html. No DOM.
 
 const URLS = [
