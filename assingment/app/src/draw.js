@@ -195,6 +195,10 @@ export function drawPage(page, pageCfg, options = {}) {
           strokePolylines([treated]);
         }
       }
+    } else if (item.kind === 'strike') {
+      // The scribble over a rewritten word: a single polyline stroke whose
+      // points are already in absolute page x / baseline-relative y.
+      strokePolylines([item.points], 0, item.y);
     } else if (item.kind === 'bridge') {
       // Bridge points are baseline-relative (like glyph strokes); their stored
       // x already contains the page advance, so only y is offset. No humanize:

@@ -9,10 +9,15 @@ import { inkBounds, translateStrokes } from './geometry.js';
 // advance as ink width + a bearing on each side.
 // Returns { strokes, bounds, advance, baseline } or null for empty ink.
 export function normalizeToBaseline(strokes, sideBearing) {
-  const b = inkBounds(strokes);
+  // Strokes shorter than two points are never drawn (strokePolylines needs at
+  // least two points), so they must not be counted in bounds/advance either —
+  // a stray tap would otherwise inflate a glyph's advance and leave random
+  // blank gaps inside words.
+  const drawable = strokes.filter((stroke) => stroke.length >= 2);
+  const b = inkBounds(drawable);
   if (!b) return null;
   const dx = sideBearing - b.left;
-  const moved = translateStrokes(strokes, dx, 0);
+  const moved = translateStrokes(drawable, dx, 0);
   const bounds = { left: b.left + dx, right: b.right + dx, top: b.top, bottom: b.bottom };
   return {
     strokes: moved,

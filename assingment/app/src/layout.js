@@ -31,7 +31,170 @@ export const PAGE = {
 export const SPACING = {
   wordMin: 0.35, wordMax: 0.70, wordScale: 4,
   lineMin: 1.50, lineMax: 2.10, lineScale: 3,
+  // Baseline wander: the amplitude (cap units) of the smooth per-word drift
+  // above/below the nominal line — how some words visibly start higher or
+  // lower than the line their neighbours sit on. 0 = perfectly straight lines.
+  wander: 0.22, wanderScale: 2.5,
 };
+
+// ---- Mistaken words, scribbled out and rewritten ----------------------------
+// With some probability (errors.rate, seeded per word) a word is first written
+// with a real misspelling taken from the table below, that failed attempt is
+// scribbled out with one pen pass, and the correct word is written beside it
+// on fresh space — never on top of itself. The table holds the classic
+// double-letter / ie-ei / silent-letter / letter-writing mistakes plus the
+// "w family" (what where when who which how) and commonly confused pairs
+// (written correctly, but the wrong partner of the pair is used).
+export const ERRORS = { rate: 0.08, gapAfter: 0.18 };
+
+const MISSPELLS = {
+  // double / single letter confusion
+  accommodate: ['accomodate', 'accomadate'],
+  occurrence: ['occurence', 'occurrance'],
+  recommend: ['recomend'],
+  beginning: ['begining'],
+  committee: ['committe'],
+  embarrass: ['embarass'],
+  tomorrow: ['tommorow'],
+  until: ['untill'],
+  success: ['sucess'],
+  address: ['adress'],
+  disappoint: ['disapoint'],
+  necessary: ['neccessary', 'necesary'],
+  // "ie" vs "ei"
+  receive: ['recieve'],
+  believe: ['beleive'],
+  weird: ['wierd'],
+  foreign: ['foriegn'],
+  achieve: ['acheive'],
+  friend: ['freind'],
+  seize: ['sieze'],
+  // silent / missing letters
+  definitely: ['definately', 'definitly'],
+  separate: ['seperate'],
+  government: ['goverment'],
+  environment: ['enviroment'],
+  wednesday: ['wensday'],
+  february: ['febuary'],
+  library: ['libary'],
+  probably: ['probly'],
+  grammar: ['grammer'],
+  calendar: ['calender'],
+  publicly: ['publically'],
+  independent: ['independant'],
+  existence: ['existance'],
+  maintenance: ['maintainance'],
+  completely: ['completly'],
+  sincerely: ['sincerly', 'sincerley'],
+  faithfully: ['faithfuly'],
+  enclosed: ['inclosed'],
+  referred: ['refered'],
+  transferred: ['transfered'],
+  acknowledge: ['aknowledge'],
+  guarantee: ['guarentee'],
+  assistance: ['assistence'],
+  receipt: ['reciept'],
+  privilege: ['priviledge'],
+  occasion: ['occassion'],
+  immediately: ['immediatly'],
+  opportunity: ['opportunty'],
+  convenient: ['convinient'],
+  apologize: ['appologize'],
+  apologise: ['appologise'],
+  // the "w" family and its neighbours
+  what: ['whant', 'waht'],
+  where: ['wher', 'whare'],
+  when: ['whn', 'whem'],
+  who: ['whoo', 'whou'],
+  which: ['whitch', 'wich'],
+  how: ['hoiw', 'hwo'],
+};
+
+// Words spelled right but picked wrong — write the partner, strike it, rewrite.
+const CONFUSED_PAIRS = [
+  ['their', 'there'], ['your', "you're"], ['its', "it's"],
+  ['affect', 'effect'], ['accept', 'except'], ['advice', 'advise'],
+  ['principal', 'principle'], ['stationary', 'stationery'],
+  ['loose', 'lose'], ['then', 'than'], ['to', 'too'],
+  ['whether', 'weather'], ['complement', 'compliment'],
+];
+
+const MISSPELL_TABLE = (() => {
+  const t = {};
+  for (const [correct, wrongs] of Object.entries(MISSPELLS)) t[correct] = wrongs;
+  for (const [a, b] of CONFUSED_PAIRS) {
+    (t[a] ??= []).push(b);
+    (t[b] ??= []).push(a);
+  }
+  return t;
+})();
+
+// Decide whether word `wi` gets the misspell treatment and what it becomes.
+// Leading/trailing punctuation is preserved around the misspelled core. Words
+// from the table use a listed misspelling; other words of 4+ letters get a
+// realistic generic slip instead (swapped or doubled letters, a dropped
+// middle letter), so any text can carry the occasional mistake.
+function pickMisspell(word, seed, wi, rate) {
+  const m = /^([^A-Za-z']*)([A-Za-z']+)([^A-Za-z']*)$/.exec(word);
+  if (!m) return null;
+  const core = m[2].toLowerCase();
+  const wrongs = MISSPELL_TABLE[core];
+  if (!rate || rate <= 0 || (core.length < 4 && !wrongs)) return null;
+  if (rngFor(seed, 'errsel', wi)() >= rate) return null;
+  const rng = rngFor(seed, 'errpick', wi);
+  let bad;
+  if (wrongs) {
+    bad = wrongs[Math.floor(rng() * wrongs.length)] || wrongs[0];
+  } else {
+    bad = genericMisspell(core, rng);
+  }
+  const keep = m[2][0] === m[2][0].toUpperCase();
+  return { bad: m[1] + (keep ? bad[0].toUpperCase() + bad.slice(1) : bad) + m[3], wrong: bad };
+}
+
+// A plausible handwritten slip for an ordinary word: swap a letter pair, copy
+// a letter twice, or drop a letter — always in the interior, never on the
+// first letter, so the word is clearly the intended one, half-remembered.
+function genericMisspell(core, rng) {
+  const picks = [];
+  const swaps = [];
+  for (let i = 1; i < core.length - 1; i++) swaps.push(i);
+  if (swaps.length) {
+    picks.push(() => {
+      const i = swaps[Math.floor(rng() * swaps.length)];
+      return core.slice(0, i) + core[i + 1] + core[i] + core.slice(i + 2);
+    }, () => {
+      const i = swaps[Math.floor(rng() * swaps.length)];
+      return core.slice(0, i) + core[i] + core[i] + core.slice(i + 1);
+    }, () => {
+      const i = 1 + Math.floor(rng() * (core.length - 2));
+      return core.slice(0, i) + core.slice(i + 1);
+    });
+  } else {
+    picks.push(() => core.slice(0, 2) + core[1] + core.slice(1));
+  }
+  return picks[Math.floor(rng() * picks.length)]();
+}
+
+// The scribble over a failed word: one pen pass, roughly through the middle of
+// the x-height, with a slant and a little jitter, overshooting both ends the
+// way a hand does when cancelling. Absolute page x, baseline-relative y.
+function strikePoints(x0, x1, seed, wi, xHeight) {
+  const rng = rngFor(seed, 'strike', wi);
+  const mid = (xHeight || 0.55) * 0.5;
+  const overshoot = 0.06 + rng() * 0.1;
+  const slant = (rng() * 2 - 1) * 0.1;
+  const n = Math.max(2, Math.round((x1 - x0) / 0.4));
+  const pts = [];
+  for (let k = 0; k <= n; k++) {
+    const t = k / n;
+    pts.push({
+      x: x0 - overshoot + (x1 - x0 + 2 * overshoot) * t,
+      y: mid + slant * (t - 0.5) * 2 + (k > 0 && k < n ? (rng() * 2 - 1) * 0.05 : 0),
+    });
+  }
+  return pts;
+}
 
 function advanceOf(item) {
   return item.kind === 'glyph' ? item.sample.advance : fallbackAdvance(item.ch);
@@ -76,7 +239,7 @@ function lineGapAt(seed, index, s) {
 // and pairs of joined letters get bridge items between them; a bridged pair
 // pulls slightly closer. Each line is an array of placed items
 // ({kind, sample|ch|points, x}). Returns [{ items }].
-function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
+function wrapLines(store, text, seed, pageCfg, spacing, cursive, errors) {
   const rightEdge = pageCfg.widthPx / pageCfg.capPx - pageCfg.marginX;
   const on = !!cursive?.enabled && !!store.cursive;
   const joinY = (store.metrics?.xHeight || DEFAULT_GUIDES.xHeight) * CURSIVE.joinYFrac;
@@ -97,6 +260,7 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
         if (item.pull) penX -= item.pull;
         item.x = penX;
         penX += advanceOf(item);
+        item.wi = wi; // which word this item belongs to (baseline wander)
         current.push(item);
       }
       if (!on) return;
@@ -135,21 +299,20 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
       return n;
     };
 
-    for (const word of wordsOf(paragraph)) {
-      // Variant choice per character, in word order, from a per-word stream.
-      const rng = rngFor(seed, 'word', wordIndex);
-      const gap = wordGapAt(seed, wordIndex, spacing); // gap before this word
-      const wi = wordIndex++;
-
-      const wordItems = [];
+    // Build one word's placed items (variant choice + cursive choices). The
+    // correct word uses the 'word' stream (unchanged from before); a misspelled
+    // attempt uses its own stream so neither disturbs the other's picks.
+    const buildWordRun = (word, wi, streamName = 'word') => {
+      const rng = rngFor(seed, streamName, wi);
+      const items = [];
       for (let i = 0; i < word.length; i++) {
         const ch = word[i];
         const list = store.glyphs[ch];
         if (list && list.length) {
           const sample = list[Math.floor(rng() * list.length)];
-          wordItems.push({ kind: 'glyph', sample });
+          items.push({ kind: 'glyph', sample });
         } else {
-          wordItems.push({ kind: 'fallback', ch });
+          items.push({ kind: 'fallback', ch });
         }
       }
 
@@ -161,22 +324,72 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
       // loop below stays a direct consequence of the pair table.
       if (on) {
         const mode = joinMode(seed, wi, cursive.amount);
-        for (let i = 0; i < wordItems.length; i++) {
-          if (wordItems[i].kind !== 'glyph') continue;
-          wordItems[i].cursive = chooseMiscForItem(store, word[i], seed, wi, i, mode);
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].kind !== 'glyph') continue;
+          items[i].cursive = chooseMiscForItem(store, word[i], seed, wi, i, mode);
         }
-        for (let i = 0; i < wordItems.length - 1; i++) {
-          if (chooseForPair(store, word, wordItems, i, seed, wi, mode)) {
-            wordItems[i + 1].pull = joinPull(seed, wi, i, wordItems[i].cursive.suffix);
+        for (let i = 0; i < items.length - 1; i++) {
+          if (chooseForPair(store, word, items, i, seed, wi, mode)) {
+            items[i + 1].pull = joinPull(seed, wi, i, items[i].cursive.suffix);
           }
+        }
+      }
+      return items;
+    };
+
+    // Width of a run of items, including per-item join pull.
+    const runWidth = (items) => items.reduce((w, it) => w + advanceOf(it) - (it.pull || 0), 0);
+
+    for (const word of wordsOf(paragraph)) {
+      const wi = wordIndex++;
+      const gap = wordGapAt(seed, wi, spacing);
+      const wordItems = buildWordRun(word, wi);
+
+      // Phase "mistakes": occasionally write a real misspelling first, scribble
+      // it out, then write the correct word beside it. The whole unit is kept
+      // on one line (a strike is never split); if it cannot fit even on a
+      // fresh line, the word is written plainly instead.
+      const err = pickMisspell(word, seed, wi, errors?.rate);
+      if (err) {
+        const badItems = buildWordRun(err.bad, wi, 'errbad');
+        const strikeGap = ERRORS.gapAfter;
+        const unitExtra = runWidth(badItems) + strikeGap * 2;
+        const space = current.length && needSpace ? gap : 0;
+        const unitW = runWidth(wordItems) + unitExtra;
+        const lineWidth = rightEdge - pageCfg.marginX;
+        if (unitExtra + unitW - strikeGap <= lineWidth) {
+          // placeRun inside placePart records x extents; place manually here
+          const placePart = (items) => {
+            const x0 = penX;
+            placeRun(items, wi);
+            return { x0, x1: penX };
+          };
+          if (unitW > rightEdge - penX - space && current.length) {
+            lines.push({ items: current });
+            current = [];
+            penX = pageCfg.marginX;
+            needSpace = false;
+          } else {
+            penX += space;
+          }
+          // On a fresh line everything fits by the width check above; place.
+          const a = placePart(badItems);
+          penX += strikeGap; // breathe before the strike's ink runs past x1
+          const s = strikePoints(a.x0, a.x1, seed, wi, store.metrics?.xHeight);
+          current.push({ kind: 'strike', points: s, wi, x: a.x0 });
+          penX += strikeGap;
+          placePart(wordItems);
+          needSpace = true;
+          continue;
         }
       }
 
       // The hyphen sample used if this word is split (chosen from the same
       // per-word stream, so it is deterministic like every other variant).
       const dashList = store.glyphs['-'];
+      const dashRng = rngFor(seed, 'dashpick', wi);
       const dash = dashList && dashList.length
-        ? { kind: 'glyph', sample: dashList[Math.floor(rng() * dashList.length)] }
+        ? { kind: 'glyph', sample: dashList[Math.floor(dashRng() * dashList.length)] }
         : { kind: 'fallback', ch: '-' };
       const dashW = advanceOf(dash);
 
@@ -236,14 +449,16 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive) {
 // line subtracts its own varied gap, so variation accumulates down the page and
 // pagination follows from the accumulated positions. `cursive` (optional) is
 // { enabled, amount }; when omitted or disabled the output is exactly Phase 2's.
-// Returns { pages:[{ index, items }], page, lineCount, spacing, cursive }.
-export function layoutDocument(store, text, seed, pageCfg = PAGE, spacing = SPACING, cursive = null) {
+// `errors` (optional) is { rate } — the chance a word is misspelled, struck
+// out and rewritten (0 disables). Returns { pages:[{ index, items }], page,
+// lineCount, spacing, cursive }.
+export function layoutDocument(store, text, seed, pageCfg = PAGE, spacing = SPACING, cursive = null, errors = null) {
   const m = store.metrics;
   const pageH = pageCfg.heightPx / pageCfg.capPx;
   const firstBaseline = pageH - pageCfg.top - m.ascender;
   const minBaseline = pageCfg.bottom + m.descender;
 
-  const lines = wrapLines(store, text, seed, pageCfg, spacing, cursive || { enabled: false });
+  const lines = wrapLines(store, text, seed, pageCfg, spacing, cursive || { enabled: false }, errors);
   const pages = [];
   let page = null;
   let baseline = firstBaseline;
@@ -261,7 +476,16 @@ export function layoutDocument(store, text, seed, pageCfg = PAGE, spacing = SPAC
         baseline = firstBaseline;
       }
     }
-    for (const item of line.items) page.items.push({ ...item, y: baseline });
+    for (const item of line.items) {
+      // Whole words drift smoothly above/below the nominal line (value noise
+      // over the word index), so word starts visibly wander like real
+      // handwriting; letters and their bridges inside one word stay together.
+      const amp = spacing.wander || 0;
+      const dy = amp
+        ? valueNoise1D(`${seed}|wander`, item.wi ?? j, spacing.wanderScale || 2.5) * amp
+        : 0;
+      page.items.push({ ...item, y: baseline + dy });
+    }
   });
 
   return { pages, page: pageCfg, lineCount: lines.length, spacing, cursive: cursive || { enabled: false } };

@@ -81,6 +81,9 @@ gjpqy hang below the baseline; AaBb 0123 sit on it.</textarea>
     <div class="quad" style="margin-top:10px">
       <div style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="cursiveOn" style="width:auto"><label for="cursiveOn" style="margin:0">Cursive joins</label></div>
       <div><label for="cursiveAmt">Cursiveness (%)</label><input id="cursiveAmt" type="range" min="0" max="100" step="5" style="padding:0;background:transparent;border:0"></div>
+      <div><label for="wanderAmt">Line wander (%)</label><input id="wanderAmt" type="range" min="0" max="100" step="5" style="padding:0;background:transparent;border:0"></div>
+      <div><label for="errAmt">Mistakes (%)</label><input id="errAmt" type="range" min="0" max="50" step="1" style="padding:0;background:transparent;border:0"></div>
+      <div style="flex:0 0 auto;display:flex;align-items:center;gap:8px"><input type="checkbox" id="onlyTable" style="width:auto" checked><label for="onlyTable" style="margin:0">Common only</label></div>
     </div>
     <div class="stats" id="stats"></div>
     <div class="warn" id="warn"></div>
@@ -113,6 +116,10 @@ let canvases = [];
 // Cursive controls (Phase 3): checkbox + 0-100% slider, defaults from choose.js.
 $('#cursiveOn').checked = CURSIVE_DEFAULTS.enabled;
 $('#cursiveAmt').value = CURSIVE_DEFAULTS.amount * 100;
+// Line wander: 0% = ruler-straight lines, 100% = +-0.65 cap units of drift.
+$('#wanderAmt').value = (SPACING.wander / 0.65) * 100;
+// Mistakes: chance per word of a misspell + scribble + rewrite (table-driven).
+$('#errAmt').value = 8;
 
 function readCursive() {
   return { enabled: $('#cursiveOn').checked, amount: (Number($('#cursiveAmt').value) || 0) / 100 };
@@ -162,6 +169,8 @@ function readSpacing() {
     lineMax: Number($('#lineMax').value),
     wordScale: SPACING.wordScale,
     lineScale: SPACING.lineScale,
+    wander: ((Number($('#wanderAmt').value) || 0) / 100) * 0.65,
+    wanderScale: SPACING.wanderScale,
   };
   const vals = [s.wordMin, s.wordMax, s.lineMin, s.lineMax];
   if (!vals.every(Number.isFinite)) { toast('Gap settings must all be numbers.'); return null; }
@@ -198,7 +207,9 @@ async function render() {
   const pageCfg = pageSize();
   const text = $('#text').value;
   const seed = Number($('#seed').value) || 1;
-  const doc = layoutDocument(store, text, seed, pageCfg, spacing, readCursive());
+  const doc = layoutDocument(store, text, seed, pageCfg, spacing, readCursive(), {
+    rate: (Number($('#errAmt').value) || 0) / 100,
+  });
 
   preview.textContent = '';
   canvases = doc.pages.map((page, pageIndex) => {
@@ -237,7 +248,7 @@ $('#inkWAdj').addEventListener('input', () => {
   $('#inkW').value = $('#inkWAdj').value; // slider and number box stay in step
   render();
 });
-['cursiveOn', 'cursiveAmt'].forEach((id) => {
+['cursiveOn', 'cursiveAmt', 'wanderAmt', 'errAmt'].forEach((id) => {
   $('#' + id).addEventListener('change', render);
 });
 $('#pdf').onclick = async () => {
