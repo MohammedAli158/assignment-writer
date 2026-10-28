@@ -1,26 +1,39 @@
 // extract.js — Static (no ML) extraction of the cursive extras from a
-// per-letter cursive sample (prefix = entry stroke, suffix = exit stroke,
-// misc = extra body ink such as a loop). Method (readme 6.3):
+// per-letter cursive sample: prefix = entry stroke, suffix = exit stroke,
+// misc = extra body ink such as a loop. Called by cursive.html on each saved
+// cursive sample. Pure geometry; no DOM, no randomness.
+//
+// The sample is compared against ONE base print variant (store.glyphs[ch]
+// [sample.baseIndex]), not the union envelope of all variants — per-variant
+// edges differ too much for a shared envelope, which is what put extras on
+// the wrong letter shapes. Both live in the same cap-unit frame: the cursive
+// capture keeps the as-drawn x (capture.js save({ align: 'ghost' })), and the
+// ghost variant was drawn exactly there, so traced body ink sits on the base
+// ink and no re-anchoring is needed at draw time.
+//
+// Method:
 //   1. measure on strokes smoothed with a 3-point moving average on dense
 //      strokes (kills mouse jitter); endpoints pinned, NO Chaikin, so lengths
 //      are not stretched (locked decision);
-//   2. compare the sample to the base glyph of the same letter in the shared
-//      cap-unit frame (baseline y=0, y up); the body region is the median
-//      left/right ink edge over the base variants;
-//   3. flag every point 'L' (left of body) / 'R' (right of body) / 'M'
-//      (inside the body's x-range but beyond the base's padded per-band
-//      y-range); same-flag runs become extras, cropped with a few neighbouring
-//      points so the shape keeps its junction with the body.
-// Called by cursive.html on each saved cursive sample. Pure geometry; no DOM,
-// no randomness.
+//   2. for every sample point, measure the distance to the base variant's
+//      ink; a point within CONTACT_TOL counts as body contact;
+//   3. per stroke: the run before the first contact is a prefix, the run
+//      after the last contact is a suffix, off-body runs in between (or a
+//      stroke that never touches the base) are misc. Runs below the noise
+//      floor are dropped; each extra keeps a few neighbouring points so its
+//      shape reconnects to the body.
+//
+// Extras are stored in the sample's frame (== the base variant's frame):
+// rel points relative to the attach point, so draw.js anchors them at
+// (item.x, item.y) exactly like the base strokes. `base` (the variant index)
+// and `from` (the sample index) are attached by the caller (cursive.html).
 
-import { inkBounds } from '../geometry.js';
-
-const BINS = 24;          // x-bands used to profile the base glyph
 const MIN_RUN_POINTS = 3; // a run shorter than this is noise and ignored
 const MIN_RUN_LEN = 0.08; // cap units of polyline length; same noise floor
 const CONTEXT = 3;        // neighbouring points kept around a run when cropping
 const DENSE_POINTS = 12;  // live-capture strokes are denser than this
+const CONTACT_TOL = 0.06; // cap units: a sample point this close to base ink is body
+const NOISE_FLOOR = 0.04; // prefix/suffix with a smaller reach is capture noise
 
 // 3-point moving average on interior points; endpoints stay put.
 function smoothForMeasure(strokes) {
@@ -38,160 +51,132 @@ function smoothForMeasure(strokes) {
   });
 }
 
-function median(vals) {
-  const s = [...vals].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-}
-
 function strokeLen(stroke, from, to) {
   let len = 0;
   for (let i = from + 1; i <= to; i++) len += Math.hypot(stroke[i].x - stroke[i - 1].x, stroke[i].y - stroke[i - 1].y);
   return len;
 }
 
-// Per-x-band y-range [min,max] of one glyph's ink, over the body region.
-function profileBins(strokes, left, right, bins) {
-  const w = (right - left) / bins;
-  const out = Array.from({ length: bins }, () => ({ min: Infinity, max: -Infinity }));
-  for (const stroke of strokes) {
-    for (const p of stroke) {
-      const i = Math.floor((p.x - left) / w);
-      if (i < 0 || i >= bins) continue;
-      if (p.y > out[i].max) out[i].max = p.y;
-      if (p.y < out[i].min) out[i].min = p.y;
-    }
+// The base variant's ink as segments [a, b] (2+ point strokes only).
+function inkSegments(strokes) {
+  const segs = [];
+  for (const stroke of strokes || []) {
+    for (let i = 1; i < stroke.length; i++) segs.push([stroke[i - 1], stroke[i]]);
   }
-  return out;
+  return segs;
 }
 
-// The y-range per x-band that the letter's ink can occupy across ALL of its
-// variants (per-band envelope: the min of mins and the max of maxes). Only
-// ink that leaves this envelope can be a cursive misc extra — a loop or an
-// extended tail — because a normal variant of the letter always stays inside
-// its own envelope. Bins with no variant ink fall back to the widest ink
-// extent of the letter (they are body holes, not extras).
-function bodyBand(variants, left, right) {
-  const perVariant = variants.map((v) => profileBins(v.strokes, left, right, BINS));
-  const lo = Math.min(...variants.map((v) => v.bounds.bottom));
-  const hi = Math.max(...variants.map((v) => v.bounds.top));
-  return Array.from({ length: BINS }, (_, i) => {
-    const a = Math.min(...perVariant.map((vp) => vp[i].min));
-    const b = Math.max(...perVariant.map((vp) => vp[i].max));
-    return Number.isFinite(a) && Number.isFinite(b) ? { min: a, max: b } : { min: lo, max: hi };
-  });
+function segDist(p, a, b) {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const l2 = abx * abx + aby * aby;
+  let t = l2 ? ((p.x - a.x) * abx + (p.y - a.y) * aby) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t));
 }
 
-// Flag one point: 'L' left of body, 'R' right of body, 'M' beyond the body
-// envelope inside the body, or null (confined to the body).
-function flag(p, bodyLeft, bodyRight, ranges, w) {
-  if (p.x < bodyLeft) return 'L';
-  if (p.x > bodyRight) return 'R';
-  const bin = ranges[Math.min(BINS - 1, Math.max(0, Math.floor((p.x - bodyLeft) / w)))];
-  const pad = 0.04; // rounding guard only; the envelope is generous already
-  if (p.y > bin.max + pad || p.y < bin.min - pad) return 'M';
-  return null;
-}
-
-// Runs of one flag inside one stroke, as { flag, start, end } index pairs.
-function runsOf(stroke, flags) {
-  const runs = [];
-  let current = null;
-  let start = -1;
-  const flush = (end) => {
-    if (!current) return false;
-    const long = (end - start + 1) >= MIN_RUN_POINTS || strokeLen(stroke, start, end) >= MIN_RUN_LEN;
-    if (long) runs.push({ flag: current, start, end });
-    return long;
-  };
-  for (let i = 0; i < stroke.length; i++) {
-    const f = flags[i];
-    if (f !== current) {
-      if (current) flush(i - 1);
-      current = f;
-      start = i;
-    }
+function distToInk(p, segs) {
+  let best = Infinity;
+  for (const [a, b] of segs) {
+    const d = segDist(p, a, b);
+    if (d < best) best = d;
   }
-  if (current) flush(stroke.length - 1);
-  return runs;
+  return best;
 }
 
-// Turn one run into an Extra record (phase 6.3 fields): shape as points
-// relative to the attach point, plus length, reach and the reference edges.
-function runToExtra(stroke, run, body) {
-  const cStart = Math.max(0, run.start - (run.flag === 'R' ? CONTEXT : 2));
-  const cEnd = Math.min(stroke.length - 1, run.end + (run.flag === 'L' ? CONTEXT : 2));
+// Turn one run into an Extra record: shape as points relative to the attach
+// point (the junction on the body), plus length, reach and the base variant's
+// reference edges. `attachIdx` is the body-contact point the run left or
+// reaches; null for a stroke with no contact at all.
+function runToExtra(stroke, run, kind, attachIdx, base, segs) {
+  const cropBefore = kind === 'suffix' ? CONTEXT : kind === 'misc' ? 2 : 0;
+  const cropAfter = kind === 'prefix' ? CONTEXT : kind === 'misc' ? 2 : 0;
+  const cStart = Math.max(0, run.start - cropBefore);
+  const cEnd = Math.min(stroke.length - 1, run.end + cropAfter);
   const pts = stroke.slice(cStart, cEnd + 1).map((p) => ({ x: p.x, y: p.y }));
 
-  // The attach point is the junction ON the body edge, so the extra reconnects
-  // to the body exactly where it left it.
-  let attach = null;
-  if (run.flag === 'L') attach = pts.find((p) => p.x >= body.left) || pts[pts.length - 1];
-  else if (run.flag === 'R') attach = pts.findLast((p) => p.x <= body.right) || pts[0];
-  else attach = pts[0];
+  const attach = stroke[attachIdx ?? run.start];
 
   let reach = 0;
-  if (run.flag === 'L') {
-    reach = Math.max(...stroke.slice(run.start, run.end + 1).map((p) => body.left - p.x));
-  } else if (run.flag === 'R') {
-    reach = Math.max(...stroke.slice(run.start, run.end + 1).map((p) => p.x - body.right));
-  } else {
-    reach = Math.max(...stroke.slice(run.start, run.end + 1).map((p) => {
-      const bin = body.ranges[Math.min(BINS - 1, Math.max(0, Math.floor((p.x - body.left) / body.w)))];
-      return Math.max(p.y - bin.max, bin.min - p.y);
-    }));
-  }
+  const runPts = stroke.slice(run.start, run.end + 1);
+  if (kind === 'prefix') reach = Math.max(...runPts.map((p) => attach.x - p.x));
+  else if (kind === 'suffix') reach = Math.max(...runPts.map((p) => p.x - attach.x));
+  else reach = Math.max(...runPts.map((p) => distToInk(p, segs)));
 
   return {
-    kind: run.flag === 'L' ? 'prefix' : run.flag === 'R' ? 'suffix' : 'misc',
+    kind,
     rel: pts.map((p) => ({ x: +(p.x - attach.x).toFixed(4), y: +(p.y - attach.y).toFixed(4) })),
     attach: { x: +attach.x.toFixed(4), y: +attach.y.toFixed(4) },
-    ref: { left: +body.left.toFixed(4), right: +body.right.toFixed(4) },
+    ref: { left: +base.bounds.left.toFixed(4), right: +base.bounds.right.toFixed(4) },
     reach: +reach.toFixed(4),
     length: +strokeLen(stroke, run.start, run.end).toFixed(4),
   };
 }
 
-// MERGE_ON_STROKE: two same-kind runs in one stroke with at most this many
-// unflagged points between them are one extra (a loop can dip back into the
-// padded band and fragment).
+// MERGE_ON_STROKE: two misc runs in one stroke with at most this many body
+// contact points between them are one extra (a loop can graze the ink and
+// fragment).
 const MERGE_GAP = 2;
 
-// Main entry: baseVariants (store.glyphs[char]) + a normalized cursive sample
-// -> list of Extra records, in drawing order.
-export function extractExtras(baseVariants, sample) {
-  if (!baseVariants || !baseVariants.length) return [];
+// Main entry: ONE base variant (store.glyphs[char][baseIndex]) + a normalized
+// cursive sample (same frame) -> list of Extra records, in drawing order.
+export function extractExtras(base, sample) {
+  if (!base || !sample || !Array.isArray(sample.strokes) || !base.bounds) return [];
+  const segs = inkSegments(base.strokes);
+  if (!segs.length) return [];
   const smooth = smoothForMeasure(sample.strokes);
-  if (!inkBounds(smooth)) return [];
-
-  const bodyLeft = median(baseVariants.map((v) => v.bounds.left));
-  const bodyRight = median(baseVariants.map((v) => v.bounds.right));
-  const body = {
-    left: bodyLeft,
-    right: bodyRight,
-    ranges: bodyBand(baseVariants, bodyLeft, bodyRight),
-    w: (bodyRight - bodyLeft) / BINS,
-  };
 
   const extras = [];
   for (const stroke of smooth) {
-    const flags = stroke.map((p) => flag(p, body.left, body.right, body.ranges, body.w));
-    const runs = runsOf(stroke, flags);
+    if (stroke.length < 2) continue;
+    const contact = stroke.map((p) => distToInk(p, segs) <= CONTACT_TOL);
+    const first = contact.indexOf(true);
+    const last = contact.lastIndexOf(true);
 
-    // Merge runs of the same flag separated only by a few unflagged points.
+    const emit = (run, kind, attachIdx) => {
+      const long = run.end - run.start + 1 >= MIN_RUN_POINTS || strokeLen(stroke, run.start, run.end) >= MIN_RUN_LEN;
+      if (!long) return null;
+      const extra = runToExtra(stroke, run, kind, attachIdx, base, segs);
+      // A prefix/suffix barely past the body is capture noise, not a flick a
+      // renderer can bridge with; keep only real sticks-out-shapes.
+      if ((kind === 'prefix' || kind === 'suffix') && extra.reach < NOISE_FLOOR) return null;
+      return extra;
+    };
+
+    if (first === -1) {
+      // The stroke never touches the base: all of it is misc body ink.
+      const extra = emit({ start: 0, end: stroke.length - 1 }, 'misc', null);
+      if (extra) extras.push(extra);
+      continue;
+    }
+
+    if (first > 0) {
+      const pre = emit({ start: 0, end: first - 1 }, 'prefix', first);
+      if (pre) extras.push(pre);
+    }
+    if (last < stroke.length - 1) {
+      const suf = emit({ start: last + 1, end: stroke.length - 1 }, 'suffix', last);
+      if (suf) extras.push(suf);
+    }
+
+    // Interior off-body runs between the first and last contact: misc.
+    const runs = [];
+    for (let i = first + 1; i <= last; ) {
+      if (contact[i]) { i++; continue; }
+      let j = i;
+      while (j <= last && !contact[j]) j++;
+      runs.push({ start: i, end: j - 1 });
+      i = j;
+    }
     const merged = [];
     for (const run of runs) {
       const prev = merged[merged.length - 1];
-      if (prev && prev.flag === run.flag && run.start - prev.end - 1 <= MERGE_GAP) prev.end = run.end;
+      if (prev && run.start - prev.end - 1 <= MERGE_GAP) prev.end = run.end;
       else merged.push({ ...run });
     }
-
     for (const run of merged) {
-      const extra = runToExtra(stroke, run, body);
-      // A prefix/suffix barely past the body edge is capture noise, not a
-      // flick a renderer can bridge with; keep only real sticks-out-shapes.
-      if ((extra.kind === 'prefix' || extra.kind === 'suffix') && extra.reach < 0.04) continue;
-      extras.push(extra);
+      const extra = emit(run, 'misc', run.start - 1); // the contact point just before
+      if (extra) extras.push(extra);
     }
   }
   return extras;

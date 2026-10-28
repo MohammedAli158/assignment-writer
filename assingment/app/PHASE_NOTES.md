@@ -424,3 +424,98 @@ Take `o` in "dog" on some line:
 - Browser visuals (the capture page preview, cursive rendering, PDF) are NOT
   VERIFIED here — no browser in this environment. Ali must run the visual
   pass, and he still owes the default cursive profile capture.
+
+---
+
+# PHASE_NOTES.md — Phase 3.5 (per-variant cursive binding + ink scale)
+
+## What Ali saw and what caused it (both verified against his data)
+
+1. Random strokes with cursive on. `default-profile (3).json` holds 71 print
+   variants and 179 cursive samples; extraction produced 0 prefixes, 164
+   suffixes and 260 misc strokes. Four causes, all structural:
+   - The cursive sample was compared against the UNION envelope of ALL print
+     variants of the letter; nothing recorded which variant it was written
+     over ("I don't know which glyph is the base").
+   - Layout draws a RANDOM variant per letter; extras were re-anchored to
+     that variant's ink edges, but variants of `a` have right edges at
+     0.59 / 0.69 / 1.10 cap — a suffix lands wherever those differ.
+   - Prefixes never existed (see below), so every bridge ended at an
+     arbitrary fixed height (`joinY` = x-height*0.6) on the next letter.
+   - Misc extras (260!) were cursive body strokes outside the union
+     envelope, attached to EVERY letter in full mode — the random loops.
+   - A fifth cause surfaced while fixing: the capture's left-edge
+     re-anchor shifted a cursive sample right by its ENTRY FLICK's reach
+     (the flick tip, not the body, defines the ink's left edge), so the
+     traced body never sat on the variant's body in the first place.
+
+2. Thin ink also looked lighter. `drawPage` rasterized 1:1: a line below
+   ~1px only partly covers each pixel and antialiasing blends ink with
+   white — width and darkness are coupled on a raster.
+
+## Fix 1: every cursive sample belongs to one print variant
+
+- Data model: the cursive section is versioned (`CURSIVE_VERSION = 2`).
+  Samples carry `baseIndex` (index into `store.glyphs[ch]`), extras carry
+  `base` (the same index) and `from` (the sample index). A section not at
+  version 2 is dropped whole (persist.js on load; mergeCursive on import) —
+  stale extras cannot be salvaged because their base was never recorded.
+- Capture: `capture.js setGhost(sample, alpha)` draws the chosen variant
+  faintly (inside clearInk, after guides; never in strokes or save output),
+  and `save({ align: 'ghost' })` keeps the AS-DRAWN x — the ghost variant
+  was drawn exactly there, so sample frame == variant frame and the body
+  sits on the body. `advance.js normalizeToBaseline(strokes, bearing, opts)`
+  skips the x shift when `opts.shiftX === false`.
+- Extraction: `extractExtras(base, sample)` measures against ONE variant.
+  Per point: distance to the base ink; within CONTACT_TOL (0.06) = body
+  contact. Per stroke: run before the first contact = prefix, run after the
+  last contact = suffix, off-body runs between (or a stroke that never
+  touches) = misc. Same noise floors as before (runs < 3 points AND < 0.08
+  cap are noise; prefix/suffix with reach < 0.04 are noise). Extras keep
+  rel/attach in the variant frame; `ref` comes from that variant's bounds.
+- Rendering: `choose.js availableFor(store, ch, base)` only offers extras
+  whose `base` equals the drawn variant (`item.sampleIndex`, stored by
+  layout). A pair joins only when the LEFT variant has a suffix and the
+  RIGHT variant has a prefix — the joinY fallback is deleted. Misc is a
+  per-letter coin (0.25), same base only, never in separate mode. `draw.js
+  anchored()` adds `item.x/y + attach + rel` for every kind — no remap.
+  Bridge anchors use the same math, so bridge, suffix tip and prefix entry
+  coincide to 1e-9; when the flick already reaches the entry (< 0.02) no
+  bridge item is needed at all.
+- Capture UX: letter by letter, then variant by variant — a variant strip,
+  the ghost behind the ink, an opacity slider (default 28%), prompts
+  "Cursive 'a' — variant 2 of 3. Trace the grey body, then add the entry
+  flick on the left and the exit flick on the right." Save warns when no
+  entry/exit stroke was found and auto-advances to the next unfinished
+  variant. Coverage is per variant: done = one sample of THAT variant
+  produced both a prefix and a suffix (variantCoverage in store.js).
+
+## Fix 2: scale the raster so thin ink stays dark
+
+`drawPage(page, pageCfg, options)` gained `options.scale` (S): canvas
+`widthPx*S x heightPx*S`, `at()` uses `capPx*S`, `lineWidth = inkWidth*S`,
+the fallback sprite renders at `capPx*S` with target `inkWidth*S` and S in
+its cache key. `render.html` previews at `S = max(2, ceil(devicePixelRatio))`
+(the CSS `.page` width is unchanged, so the visible size is identical) and
+the PDF export re-rasterizes the same layout at S = 3 (~288 dpi) before
+`pagesToPdf`. A 0.8px line then covers >= 2 solid device pixels.
+`tests.html` (new browser page) draws stems at widths 0.5 / 1 / 2.2 / 4 and
+asserts the darkest pixel's RGB equals the ink colour within 2 at alpha 255.
+
+## Verification (Node)
+
+- 68-check suite (`tests/phase3.test.mjs`), all pass: extraction fixtures
+  (entry/exit/loop/never-touching/dense), per-base choosing (g0->n0 joins;
+  g1->n1, g1->n0, g0->n1 stay separate; stale extras ignored), misc chance
+  statistics (~25%, never separate-mode, same base only), version gating
+  (initCursive stamps, mergeCursive skips v1), per-variant coverage, and the
+  old invariants (determinism, margins, pair table, cursive OFF == Phase 2).
+- Ghost-trace simulation over ALL 354 legacy variants (variant points +
+  +-0.01 jitter + interpolated flicks, saved align 'ghost'): 455 prefix /
+  477 suffix / 23 misc extras, 274/354 variants fully covered, joined pairs
+  100% ink-continuous, every joined successor carries a prefix. (Compare the
+  broken numbers: 0 / 164 / 260.)
+- `node --check` passes on all touched modules and both inline HTML scripts.
+- Browser output (cursive capture UI, ghost, HiDPI preview, PDF, tests.html)
+  is NOT VERIFIED — no browser in this environment. Ali runs the visual pass;
+  his old cursive data must be re-captured (by design: it had no base).

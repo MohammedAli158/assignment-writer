@@ -11,8 +11,7 @@
 import { rngFor, valueNoise1D } from './rng.js';
 import { splitParagraphs, wordsOf } from './text.js';
 import { fallbackAdvance } from './fallback.js';
-import { DEFAULT_GUIDES } from './geometry.js';
-import { joinMode, chooseMiscForItem, chooseForPair, joinPull, CURSIVE } from './cursive/choose.js';
+import { joinMode, chooseMiscForItem, chooseForPair, joinPull } from './cursive/choose.js';
 import { buildBridge } from './cursive/bridge.js';
 
 export const PAGE = {
@@ -242,7 +241,6 @@ function lineGapAt(seed, index, s) {
 function wrapLines(store, text, seed, pageCfg, spacing, cursive, errors) {
   const rightEdge = pageCfg.widthPx / pageCfg.capPx - pageCfg.marginX;
   const on = !!cursive?.enabled && !!store.cursive;
-  const joinY = (store.metrics?.xHeight || DEFAULT_GUIDES.xHeight) * CURSIVE.joinYFrac;
   const lines = [];
   let wordIndex = 0;
   let runStamp = 0; // bridge seed index, unique across the document's runs
@@ -269,16 +267,15 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive, errors) {
         const suffix = item.cursive?.suffix;
         if (!suffix || items[i + 1].kind !== 'glyph') continue;
         const next = items[i + 1];
+        // Both ends live in their variant's frame (extras were extracted
+        // against exactly the drawn variant), so the anchors are plain frame
+        // coordinates offset by the item position — same math as draw.js.
         const tip = suffix.rel[suffix.rel.length - 1];
-        const a = { x: item.x + item.sample.bounds.right + tip.x, y: suffix.attach.y + tip.y };
-        let b;
-        const pre = next.cursive?.prefix;
-        if (pre) {
-          const enter = pre.rel[0];
-          b = { x: next.x + next.sample.bounds.left + enter.x, y: pre.attach.y + enter.y };
-        } else {
-          b = { x: next.x + next.sample.bounds.left, y: joinY };
-        }
+        const a = { x: item.x + suffix.attach.x + tip.x, y: suffix.attach.y + tip.y };
+        const pre = next.cursive?.prefix; // set together with the suffix by chooseForPair
+        if (!pre) continue;
+        const enter = pre.rel[0];
+        const b = { x: next.x + pre.attach.x + enter.x, y: pre.attach.y + enter.y };
         const points = buildBridge(a, b, seed, wi, runStamp++);
         if (points) current.push({ kind: 'bridge', points });
       }
@@ -309,24 +306,27 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive, errors) {
         const ch = word[i];
         const list = store.glyphs[ch];
         if (list && list.length) {
-          const sample = list[Math.floor(rng() * list.length)];
-          items.push({ kind: 'glyph', sample });
+          const idx = Math.floor(rng() * list.length);
+          // sampleIndex records WHICH variant was drawn: cursive extras are
+          // extracted per variant and may only attach to their own base.
+          items.push({ kind: 'glyph', sample: list[idx], sampleIndex: idx });
         } else {
           items.push({ kind: 'fallback', ch });
         }
       }
 
       // Phase 3 only: pair-based cursive choices (readme 6.5). Misc extras
-      // are decided per letter; prefix / suffix / the pull of each joined
-      // pair come from the PAIR decision, stored on the items themselves so
-      // a split fragment carries its own pull. A suffix on letter i exists
-      // only when the pair (i, i+1) actually joins, so placeRun's bridge
-      // loop below stays a direct consequence of the pair table.
+      // get their own small per-letter chance (never a guaranteed one);
+      // prefix / suffix / the pull of each joined pair come from the PAIR
+      // decision, stored on the items themselves so a split fragment carries
+      // its own pull. A suffix on letter i exists only when the pair (i, i+1)
+      // actually joins, so placeRun's bridge loop below stays a direct
+      // consequence of the pair table.
       if (on) {
         const mode = joinMode(seed, wi, cursive.amount);
         for (let i = 0; i < items.length; i++) {
           if (items[i].kind !== 'glyph') continue;
-          items[i].cursive = chooseMiscForItem(store, word[i], seed, wi, i, mode);
+          items[i].cursive = chooseMiscForItem(store, word[i], items[i].sampleIndex, seed, wi, i, mode);
         }
         for (let i = 0; i < items.length - 1; i++) {
           if (chooseForPair(store, word, items, i, seed, wi, mode)) {
@@ -388,9 +388,13 @@ function wrapLines(store, text, seed, pageCfg, spacing, cursive, errors) {
       // per-word stream, so it is deterministic like every other variant).
       const dashList = store.glyphs['-'];
       const dashRng = rngFor(seed, 'dashpick', wi);
-      const dash = dashList && dashList.length
-        ? { kind: 'glyph', sample: dashList[Math.floor(dashRng() * dashList.length)] }
-        : { kind: 'fallback', ch: '-' };
+      let dash;
+      if (dashList && dashList.length) {
+        const dashIdx = Math.floor(dashRng() * dashList.length);
+        dash = { kind: 'glyph', sample: dashList[dashIdx], sampleIndex: dashIdx };
+      } else {
+        dash = { kind: 'fallback', ch: '-' };
+      }
       const dashW = advanceOf(dash);
 
       let rest = wordItems;

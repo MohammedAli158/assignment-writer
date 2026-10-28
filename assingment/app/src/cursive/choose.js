@@ -1,12 +1,15 @@
 // choose.js — The seeded cursive decisions made during layout: per WORD, is it
 // rendered fully joined / partly joined / fully separate; per LETTER
-// occurrence, its misc extra (loop / crossing on the body itself); and per
-// PAIR of adjacent letters, whether their suffix->prefix merge happens
-// (Ali's pair join rules, readme 6.5 — the pair table lives in pairs.js),
-// plus how much a joined pair pulls the next letter left. All randomness is
-// named streams from rng.js (readme section 8), keyed on the word and item
-// index, so editing later text never moves earlier decisions.
-// Called by layout.js. No DOM.
+// occurrence, its misc extra (loop / crossing on the body itself, own small
+// chance); and per PAIR of adjacent letters, whether their suffix->prefix
+// merge happens (Ali's pair join rules, readme 6.5 — the pair table lives in
+// pairs.js), plus how much a joined pair pulls the next letter left. All
+// randomness is named streams from rng.js (readme section 8), keyed on the
+// word and item index, so editing later text never moves earlier decisions.
+// Extras are picked PER BASE VARIANT: an extra was extracted against one
+// specific print variant (extra.base), so it may only attach to an occurrence
+// that drew exactly that variant (item.sampleIndex) — anything else put
+// flicks on the wrong letter shapes. Called by layout.js. No DOM.
 
 import { rngFor } from '../rng.js';
 import { extrasOf } from './store.js';
@@ -21,8 +24,7 @@ export const CURSIVE = {
   pullMax: 0.22,     // cap units a bridge may pull the next letter left (max)
   pullFrac: 0.45,    // fraction of the suffix's reach used as the base pull
   pullJitter: 0.04,  // seeded +/- jitter on the pull
-  joinYFrac: 0.6,    // no prefix available: the bridge enters the base at this
-                     // fraction of the x-height above the baseline
+  miscChance: 0.25,  // per-letter chance of a misc extra (was: always in full)
   pseudoFrac: 0.35,  // share of bridges that are pseudo-straight (Ali's mix)
 };
 
@@ -45,10 +47,17 @@ export function joinMode(seed, wordIndex, amount) {
   return 'full';
 }
 
-// Quick look: does this character have anything stored at all?
-function available(store, ch) {
-  if (!store.cursive || !ch) return null;
-  const e = extrasOf(store, ch);
+// The extras stored for `ch` that were extracted against base variant
+// `base` (an index into store.glyphs[ch]). Extras without a numeric base
+// (stale v1 data) never match anything. Returns null when nothing remains.
+function availableFor(store, ch, base) {
+  if (!store.cursive || !ch || !Number.isInteger(base)) return null;
+  const all = extrasOf(store, ch);
+  const e = {
+    prefix: all.prefix.filter((x) => x.base === base),
+    suffix: all.suffix.filter((x) => x.base === base),
+    misc: all.misc.filter((x) => x.base === base),
+  };
   if (!e.prefix.length && !e.suffix.length && !e.misc.length) return null;
   return e;
 }
@@ -61,15 +70,17 @@ function pick(list, rng) {
 const EMPTY = { prefix: null, suffix: null, misc: null };
 
 // Pick the MISC extra for one letter occurrence (an extra on the body itself
-// — a loop, a crossing, an extended tail). This is a per-letter decision that
-// does not depend on the pair table. mode: 'full' -> chosen; 'partly' -> a
-// coin; 'separate' -> nothing. Returns item.cursive = { prefix, suffix, misc }
-// or null; prefix/suffix are filled in later by chooseForPair.
-export function chooseMiscForItem(store, ch, seed, wordIndex, itemIndex, mode) {
-  const avail = available(store, ch);
+// — a loop, a crossing, an extended tail), with its own small per-letter
+// chance and only from the letter's own base variant (never borrowed from
+// another variant). Independent of the word mode — separate words keep
+// occasional loops, but the old "always in full mode" flood is gone.
+// Returns item.cursive = { prefix, suffix, misc } or null; prefix/suffix are
+// filled in later by chooseForPair.
+export function chooseMiscForItem(store, ch, sampleIndex, seed, wordIndex, itemIndex, mode) {
+  if (mode === 'separate') return null;
+  const avail = availableFor(store, ch, sampleIndex);
   if (!avail || !avail.misc.length) return null;
-  const take =
-    mode === 'full' || (mode === 'partly' && rngFor(seed, 'curs', 'misc', wordIndex, itemIndex)() < 0.5);
+  const take = rngFor(seed, 'curs', 'misc', wordIndex, itemIndex)() < CURSIVE.miscChance;
   if (!take) return null;
   const misc = pick(avail.misc, rngFor(seed, 'curs', 'pickM', wordIndex, itemIndex));
   if (!misc) return null;
@@ -80,11 +91,11 @@ export function chooseMiscForItem(store, ch, seed, wordIndex, itemIndex, mode) {
 // merge into letter i+1's prefix? When it does, the chosen suffix is filled
 // into left.cursive and the chosen prefix into right.cursive (creating those
 // records when empty), and the caller may then compute the pull for right.
-// Everything that is not a lowercase pair in the table stays separate — and
-// separate here means the letters keep their base shapes: no suffix, no
-// prefix, no merge. mode: 'full' -> every joinable pair joins; 'partly' -> a
-// seeded coin per PAIR; 'separate' -> nothing. Returns true exactly when the
-// pair is joined.
+// Both halves are required, each from its own letter's base variant: without
+// a stored suffix there is no exit stroke, without a stored prefix the bridge
+// would land on an arbitrary join height — either way the pair stays
+// separate. mode: 'full' -> every joinable pair joins; 'partly' -> a seeded
+// coin per PAIR; 'separate' -> nothing. Returns true exactly when joined.
 export function chooseForPair(store, word, wordItems, i, seed, wordIndex, mode) {
   if (mode === 'separate') return false;
   const left = wordItems[i];
@@ -96,19 +107,13 @@ export function chooseForPair(store, word, wordItems, i, seed, wordIndex, mode) 
     mode === 'full' || (mode === 'partly' && rngFor(seed, 'curs', 'pair', wordIndex, i)() < 0.5);
   if (!take) return false;
 
-  // The merge needs the left letter's stored suffix — without one there is
-  // no exit stroke to merge into the next entry, so the pair stays separate.
-  const leftAvail = available(store, word[i]);
+  const leftAvail = availableFor(store, word[i], left.sampleIndex);
   if (!leftAvail || !leftAvail.suffix.length) return false;
-  const suffix = pick(leftAvail.suffix, rngFor(seed, 'curs', 'pickS', wordIndex, i));
+  const rightAvail = availableFor(store, word[i + 1], right.sampleIndex);
+  if (!rightAvail || !rightAvail.prefix.length) return false;
 
-  // The right letter's prefix is optional: bridge.js anchors the bridge on
-  // the letter's left ink edge at joinY when no prefix is available.
-  const rightAvail = available(store, word[i + 1]);
-  const prefix =
-    rightAvail && rightAvail.prefix.length
-      ? pick(rightAvail.prefix, rngFor(seed, 'curs', 'pickP', wordIndex, i + 1))
-      : null;
+  const suffix = pick(leftAvail.suffix, rngFor(seed, 'curs', 'pickS', wordIndex, i));
+  const prefix = pick(rightAvail.prefix, rngFor(seed, 'curs', 'pickP', wordIndex, i + 1));
 
   left.cursive = { ...(left.cursive || EMPTY), suffix };
   right.cursive = { ...(right.cursive || EMPTY), prefix };

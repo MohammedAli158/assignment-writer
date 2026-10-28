@@ -3,6 +3,7 @@
 // Storage failures (private mode, quota) are ignored, never thrown.
 
 import { serialize, deserialize } from './glyphstore.js';
+import { CURSIVE_VERSION } from './cursive/store.js';
 
 const KEY = 'handwrite.store.v1';
 
@@ -13,7 +14,14 @@ export function saveStore(store) {
 export function loadStore() {
   try {
     const text = localStorage.getItem(KEY);
-    return text ? deserialize(text) : null;
+    if (!text) return null;
+    const store = deserialize(text);
+    // Cursive data from before the per-variant base model (no version, or
+    // v1's union-envelope extras) cannot be tied to a variant and rendered
+    // as random strokes — drop the section, keep the print glyphs. Re-import
+    // or re-capture writes a fresh CURSIVE_VERSION section.
+    if (store.cursive && store.cursive.version !== CURSIVE_VERSION) delete store.cursive;
+    return store;
   } catch {
     return null;
   }

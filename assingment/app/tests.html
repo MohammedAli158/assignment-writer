@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handwrite — Browser checks</title>
+<style>
+  :root{--bg:#0b0d16;--card:#141827;--line:rgba(148,163,184,.16);--text:#eef2f8;--muted:#9aa7bd}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:22px;line-height:1.45}
+  h1{font-size:1.25rem;margin-bottom:4px}
+  .sub{color:var(--muted);font-size:.8rem;margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;max-width:900px}
+  table{border-collapse:collapse;width:100%;font-size:.85rem}
+  td,th{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left}
+  th{color:var(--muted);font-weight:700;text-transform:uppercase;font-size:.68rem;letter-spacing:.08em}
+  .ok{color:#9fe6c6;font-weight:700}
+  .fail{color:#f5a3a3;font-weight:700}
+  #summary{margin-top:12px;font-size:.95rem;font-weight:700}
+  canvas{border:1px solid var(--line);border-radius:6px;margin-top:10px;max-width:100%;height:auto}
+</style>
+</head>
+<body>
+<h1>Browser checks</h1>
+<div class="sub">Checks that need a real canvas (Node cannot rasterize). Open this page in a browser; every row must say ok.</div>
+<div class="card">
+  <table>
+    <thead><tr><th>Check</th><th>Expected</th><th>Got</th><th>Result</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="summary">running…</div>
+  <div id="canvases"></div>
+</div>
+
+<script type="module">
+import { drawPage } from './src/draw.js';
+import { PAGE } from './src/layout.js';
+
+const rows = document.getElementById('rows');
+let failures = 0;
+function row(name, expected, got, ok) {
+  if (!ok) failures++;
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${name}</td><td>${expected}</td><td>${got}</td><td class="${ok ? 'ok' : 'fail'}">${ok ? 'ok' : 'FAIL'}</td>`;
+  rows.appendChild(tr);
+}
+
+const INK = '#243b63';
+const rgbOf = [0x24, 0x3b, 0x63];
+
+// A vertical stem as a one-stroke glyph, drawn on a real page canvas.
+// The stem's device x is an integer multiple of capPx*S, so a 1-px device
+// line covers exactly one pixel column: the darkest pixel must be the ink
+// colour at full alpha (a faded darkest pixel means the line never fully
+// covers a pixel — the "thin ink looks lighter" bug).
+function stemCanvas(inkWidth, S) {
+  const pageCfg = { ...PAGE };
+  const baselineCap = pageCfg.heightPx / pageCfg.capPx; // baseline on the bottom edge
+  const page = {
+    items: [{
+      kind: 'glyph',
+      sample: {
+        strokes: [[{ x: 1.5, y: 0.2 }, { x: 1.5, y: 0.8 }]],
+        bounds: { left: 1.5, right: 1.5, top: 0.8, bottom: 0.2 },
+        advance: 0.3,
+        baseline: 0,
+      },
+      x: 0,
+      y: baselineCap,
+    }],
+  };
+  return drawPage(page, pageCfg, { ink: INK, inkWidth, scale: S });
+}
+
+function darkestPixel(canvas) {
+  const ctx = canvas.getContext('2d');
+  const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let best = null;
+  let bestSum = Infinity;
+  for (let i = 0; i < d.length; i += 4) {
+    const sum = d[i] + d[i + 1] + d[i + 2];
+    if (sum < bestSum) { bestSum = sum; best = [d[i], d[i + 1], d[i + 2], d[i + 3]]; }
+  }
+  return best;
+}
+
+const near = (a, b, tol) => Math.abs(a - b) <= tol;
+
+for (const w of [0.5, 1, 2.2, 4]) {
+  const S = 2;
+  const canvas = stemCanvas(w, S);
+  const px = darkestPixel(canvas);
+  const ok = px && near(px[0], rgbOf[0], 2) && near(px[1], rgbOf[1], 2) && near(px[2], rgbOf[2], 2) && px[3] === 255;
+  row(
+    `stem at ink width ${w}px (S=${S}): darkest pixel is solid ink`,
+    `rgb(36,59,99) ±2, alpha 255`,
+    px ? `rgb(${px[0]},${px[1]},${px[2]}), alpha ${px[3]}` : 'none',
+    ok,
+  );
+  const holder = document.getElementById('canvases');
+  const cap = document.createElement('canvas');
+  cap.width = 80; cap.height = 240;
+  cap.getContext('2d').drawImage(canvas, -Math.round(1.5 * PAGE.capPx * S) + 20, -(PAGE.heightPx * S) + 200, canvas.width, canvas.height);
+  cap.title = `ink ${w}px @S${S}`;
+  holder.appendChild(cap);
+}
+
+// The scale option actually enlarges the backing store (CSS keeps the size).
+{
+  const canvas = stemCanvas(2.2, 3);
+  row('drawPage scale=3 triples the backing store', `${PAGE.widthPx * 3}x${PAGE.heightPx * 3}`, `${canvas.width}x${canvas.height}`, canvas.width === PAGE.widthPx * 3 && canvas.height === PAGE.heightPx * 3);
+}
+
+document.getElementById('summary').textContent = failures
+  ? `${failures} check(s) FAILED — see the red rows.`
+  : 'all checks ok';
+document.getElementById('summary').className = failures ? 'fail' : 'ok';
+</script>
+</body>
+</html>

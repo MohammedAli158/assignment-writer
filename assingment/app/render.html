@@ -112,6 +112,7 @@ const $ = (sel) => document.querySelector(sel);
 const preview = $('#preview');
 let store = loadStore();
 let canvases = [];
+let lastRender = null; // the layout behind the current preview (PDF re-render)
 
 // Cursive controls (Phase 3): checkbox + 0-100% slider, defaults from choose.js.
 $('#cursiveOn').checked = CURSIVE_DEFAULTS.enabled;
@@ -207,22 +208,32 @@ async function render() {
   const pageCfg = pageSize();
   const text = $('#text').value;
   const seed = Number($('#seed').value) || 1;
+  const inkWidth = readInkWidth();
   const doc = layoutDocument(store, text, seed, pageCfg, spacing, readCursive(), {
     rate: (Number($('#errAmt').value) || 0) / 100,
   });
 
+  // Rasterize at >= 2 device pixels per page pixel: below ~1px a canvas line
+  // only partly covers each pixel and antialiasing fades the ink, so thin
+  // settings looked lighter as well as thinner. The CSS .page width is
+  // unchanged — the browser downscales the larger backing store.
+  const S = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
   preview.textContent = '';
   canvases = doc.pages.map((page, pageIndex) => {
     const canvas = drawPage(page, pageCfg, {
       ink: $('#ink').value,
       seed,
       pageIndex,
-      inkWidth: readInkWidth(),
+      inkWidth,
+      scale: S,
     });
     canvas.className = 'page';
     preview.appendChild(canvas);
     return canvas;
   });
+  // Remember how this was laid out: the PDF export re-rasterizes the SAME
+  // doc at S=3 (~288 dpi) so a 0.8px line gets >= 2 solid device pixels.
+  lastRender = { doc, pageCfg, ink: $('#ink').value, seed, inkWidth };
 
   const report = fallbackReport(store, text);
   $('#stats').innerHTML = `pages <b>${doc.pages.length}</b> · lines <b>${doc.lineCount}</b> · size <b>${pageCfg.capPx}px/cap</b> · ink <b>${readInkWidth()}px</b> · ` +
@@ -252,7 +263,17 @@ $('#inkWAdj').addEventListener('input', () => {
   $('#' + id).addEventListener('change', render);
 });
 $('#pdf').onclick = async () => {
-  const bytes = await pagesToPdf(canvases, A4_PT);
+  if (!lastRender) return;
+  // Re-rasterize the same layout at S=3 (~288 dpi on A4) instead of shipping
+  // the screen-resolution preview into the PDF.
+  const pages = lastRender.doc.pages.map((page, pageIndex) => drawPage(page, lastRender.pageCfg, {
+    ink: lastRender.ink,
+    seed: lastRender.seed,
+    pageIndex,
+    inkWidth: lastRender.inkWidth,
+    scale: 3,
+  }));
+  const bytes = await pagesToPdf(pages, A4_PT);
   const blob = new Blob([bytes], { type: 'application/pdf' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);

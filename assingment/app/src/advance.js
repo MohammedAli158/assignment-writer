@@ -7,8 +7,13 @@ import { inkBounds, translateStrokes } from './geometry.js';
 
 // Shift strokes so the left ink edge sits at `sideBearing`, then measure the
 // advance as ink width + a bearing on each side.
+// opts.shiftX === false keeps the as-drawn x: the cursive capture uses this
+// (align 'ghost') because its sample must stay in the exact frame of the
+// print variant it was traced over — re-anchoring its left ink edge (the
+// flick TIP, not the body) would shift the whole body and put every extra on
+// the wrong spot. Print capture keeps the default (left edge re-anchored).
 // Returns { strokes, bounds, advance, baseline } or null for empty ink.
-export function normalizeToBaseline(strokes, sideBearing) {
+export function normalizeToBaseline(strokes, sideBearing, opts = {}) {
   // Strokes shorter than two points are never drawn (strokePolylines needs at
   // least two points), so they must not be counted in bounds/advance either —
   // a stray tap would otherwise inflate a glyph's advance and leave random
@@ -16,7 +21,7 @@ export function normalizeToBaseline(strokes, sideBearing) {
   const drawable = strokes.filter((stroke) => stroke.length >= 2);
   const b = inkBounds(drawable);
   if (!b) return null;
-  const dx = sideBearing - b.left;
+  const dx = opts.shiftX === false ? 0 : sideBearing - b.left;
   const moved = translateStrokes(drawable, dx, 0);
   const bounds = { left: b.left + dx, right: b.right + dx, top: b.top, bottom: b.bottom };
   return {

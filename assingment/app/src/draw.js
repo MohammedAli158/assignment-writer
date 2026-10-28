@@ -3,12 +3,21 @@
 // rasterization step, where cap units become pixels. Stroke ink goes through
 // humanize.js first (shakes out spikes, slight bow on straight lines).
 // Phase 3: glyph items whose layout gave them a cursive pick (item.cursive)
-// also draw the chosen prefix/suffix/misc shapes, re-anchored to the chosen
-// base variant's ink edges; 'bridge' items are drawn as their stored polyline
-// WITHOUT humanize (they were already shaped by cursive/bridge.js, and a
-// re-bow would move their pinned endpoints). Called by render.html.
+// also draw the chosen prefix/suffix/misc shapes — extras were extracted
+// against exactly the drawn base variant (extra.base === item.sampleIndex)
+// in that variant's frame, so they anchor at (item.x, item.y) like the base
+// strokes, with no per-kind remap; 'bridge' items are drawn as their stored
+// polyline WITHOUT humanize (they were already shaped by cursive/bridge.js,
+// and a re-bow would move their pinned endpoints). Called by render.html.
 // Randomness only via the seeded stream given in options.seed; no seed means
 // glyphs are drawn exactly as stored.
+//
+// options.scale (S) rasterizes at S device pixels per page pixel: the canvas
+// is widthPx*S x heightPx*S, cap units multiply by S and the ink width too.
+// Below ~1px a canvas line only partly covers each pixel, and antialiasing
+// blends the ink with the paper — thin ink ALSO looks lighter, not just
+// thinner. Drawing at S >= 2 keeps every stroke at least ~2 solid device
+// pixels; the CSS-sized <canvas> still displays at the old size.
 
 import { capToPx } from './geometry.js';
 import { humanizeStrokes } from './humanize.js';
@@ -19,8 +28,10 @@ import { FALLBACK_FAMILY } from './fallback.js';
 // them. Instead the char is rasterized once into a small sprite (fillText),
 // then its alpha mask is fattened with an outline stroke or eroded by a hard
 // alpha cut (bisected until the stroke-width proxy matches) so it honours the
-// same ink width as the captured strokes. Sprites are cached per char, font
-// and requested width, since a page reuses the same missing chars many times.
+// same ink width as the captured strokes — at the same scale S as everything
+// else, so the erosion cut happens on solid device pixels and the char does
+// not fade. Sprites are cached per char, font and requested width, since a
+// page reuses the same missing chars many times.
 const spriteCache = new Map();
 
 function hexToRgb(hex) {
@@ -69,8 +80,8 @@ function remapAlpha(d, w, h, t) {
   return out;
 }
 
-function fallbackSprite(ch, font, fontPx, target, rgb) {
-  const key = `${ch}|${font}|${Math.round(target * 10)}|${rgb.join(',')}`;
+function fallbackSprite(ch, font, fontPx, target, rgb, scale) {
+  const key = `${ch}|${font}|${Math.round(target * 10)}|${rgb.join(',')}|${scale}`;
   if (spriteCache.has(key)) return spriteCache.get(key);
   const probe = document.createElement('canvas');
   const pctx = probe.getContext('2d');
@@ -127,21 +138,23 @@ function fallbackSprite(ch, font, fontPx, target, rgb) {
 }
 
 export function drawPage(page, pageCfg, options = {}) {
-  const capPx = pageCfg.capPx;
+  const S = Math.max(1, options.scale || 1);
+  const capPx = pageCfg.capPx * S;
   const canvas = document.createElement('canvas');
-  canvas.width = pageCfg.widthPx;
-  canvas.height = pageCfg.heightPx;
+  canvas.width = pageCfg.widthPx * S;
+  canvas.height = pageCfg.heightPx * S;
   const ctx = canvas.getContext('2d');
 
   ctx.fillStyle = options.paper || '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   const ink = options.ink || '#243b63';
+  const inkWidth = (options.inkWidth || 2.2) * S;
   const pageIndex = options.pageIndex ?? 0;
   const at = (x, y) => capToPx(x, y, 0, canvas.height, capPx);
 
   // `dx`/`dy` move relative polylines (a stored glyph or bridge, whose origin
-  // is the pen position/baseline) onto the page. Extras are already absolute.
+  // is the pen position/baseline) onto the page.
   function strokePolylines(polylines, dx = 0, dy = 0) {
     for (const stroke of polylines) {
       if (stroke.length < 2) continue;
@@ -156,25 +169,24 @@ export function drawPage(page, pageCfg, options = {}) {
     }
   }
 
-  // Re-anchor an extracted extra to the drawn glyph: prefixes anchor on the
-  // variant's left ink edge, suffixes on its right ink edge, misc on its
-  // proportional position within the body width. attach.y needs no remap —
-  // both frames sit on the same baseline.
+  // Re-anchor an extracted extra to the drawn glyph. The extra was extracted
+  // against exactly this base variant (extra.base === item.sampleIndex) in
+  // the same cap-unit frame (left ink edge at the side bearing, baseline 0),
+  // so its attach point is already a frame coordinate: add the item position
+  // and nothing else. The old per-kind edge/proportional remap is gone — it
+  // existed only to paper over one extra fitting many variants.
   function anchored(extra, item) {
-    const sample = item.sample;
-    let anchorX;
-    if (extra.kind === 'prefix') anchorX = item.x + sample.bounds.left;
-    else if (extra.kind === 'suffix') anchorX = item.x + sample.bounds.right;
-    else anchorX = item.x + sample.bounds.left + (extra.attach.x - extra.ref.left);
-    const anchorY = item.y + extra.attach.y;
-    return extra.rel.map((p) => ({ x: anchorX + p.x, y: anchorY + p.y }));
+    return extra.rel.map((p) => ({
+      x: item.x + extra.attach.x + p.x,
+      y: item.y + extra.attach.y + p.y,
+    }));
   }
 
   for (let i = 0; i < page.items.length; i++) {
     const item = page.items[i];
     ctx.save();
     ctx.strokeStyle = ink;
-    ctx.lineWidth = options.inkWidth || 2.2;
+    ctx.lineWidth = inkWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
@@ -201,15 +213,16 @@ export function drawPage(page, pageCfg, options = {}) {
       strokePolylines([item.points], 0, item.y);
     } else if (item.kind === 'bridge') {
       // Bridge points are baseline-relative (like glyph strokes); their stored
-      // x already contains the page advance, so only y is offset. No humanize:
+      // x already contains the line's advance, so only y is offset. No humanize:
       // endpoints were pinned by bridge.js and must stay joined to neighbours.
       strokePolylines([item.points], 0, item.y);
     } else {
-      const font = `italic ${Math.round(capPx * 1.3)}px ${FALLBACK_FAMILY}`;
+      const fontPx = Math.round(capPx * 1.3);
+      const font = `italic ${fontPx}px ${FALLBACK_FAMILY}`;
       const rgb = hexToRgb(ink);
       const p = at(item.x, item.y);
       if (rgb) {
-        const sp = fallbackSprite(item.ch, font, Math.round(capPx * 1.3), options.inkWidth ?? 2.2, rgb);
+        const sp = fallbackSprite(item.ch, font, fontPx, inkWidth, rgb, S);
         ctx.drawImage(sp.canvas, Math.round(p.x) - sp.ox, Math.round(p.y) - sp.oy);
       } else {
         ctx.fillStyle = ink;

@@ -34,6 +34,11 @@
   .p.sel{border-color:var(--accent);color:#fff;background:rgba(124,58,237,.22)}
   .p small{display:block;font-size:.6rem;color:var(--muted);font-weight:400}
   .p.done{color:#9fe6c6}
+  .p.all{border-color:rgba(159,230,198,.55)}
+  .p.seen{color:#c7d2fe}
+  .v{aspect-ratio:auto;min-height:40px}
+  .v.done{color:#9fe6c6;border-color:rgba(159,230,198,.55)}
+  .v.seen{color:#c7d2fe}
   .msg{font-size:.76rem;color:#9fe6c6;min-height:1.1em}
   .warn{color:#f5c07a}
   .help{font-size:.72rem;color:var(--muted)}
@@ -58,13 +63,17 @@
 <div class="wrap">
   <div class="card">
     <h1>Capture cursive samples</h1>
-    <div class="sub">Write each letter in <b>your natural cursive</b> with its connecting entry/exit flicks, as if it stood alone in a word. On save, the cursive filter extracts the extra strokes automatically: <span class="g">prefix</span> (entry), <span class="s">suffix</span> (exit), <span class="m">misc</span> (extra body ink such as a loop).</div>
+    <div class="sub">Write each letter in <b>your natural cursive</b> with its connecting entry/exit flicks, <b>tracing the faint grey variant</b> shown behind your ink. On save, the cursive filter extracts the extra strokes for that exact variant: <span class="g">prefix</span> (entry), <span class="s">suffix</span> (exit), <span class="m">misc</span> (extra body ink such as a loop).</div>
     <div class="prompt" id="prompt"></div>
     <canvas id="cap" width="1000" height="600"></canvas>
     <div class="row" style="margin-top:12px">
       <button id="undo">Undo stroke</button>
       <button id="clear" class="bad">Clear</button>
       <button id="save" class="primary">Save cursive sample</button>
+      <div style="flex:1;min-width:180px;display:flex;align-items:center;gap:8px">
+        <label for="ghostA" style="margin:0">Ghost</label>
+        <input id="ghostA" type="range" min="0" max="100" step="5" value="28" style="flex:1;padding:0;background:transparent;border:0">
+      </div>
     </div>
     <div class="msg" id="status">Ready.</div>
     <canvas id="preview" width="1000" height="320" style="margin-top:10px"></canvas>
@@ -76,6 +85,8 @@
       <label for="charInput">Letter to capture</label>
       <input id="charInput" class="char" maxlength="1" autocomplete="off">
       <div class="stats" id="charStats"></div>
+      <label style="margin-top:12px">Print variant to trace (extras bind to this exact variant)</label>
+      <div class="palette" id="variants" style="max-height:none;grid-template-columns:repeat(auto-fill,minmax(52px,1fr))"></div>
       <label style="margin-top:12px">Prompted letters (word list: the quick brown fox…)</label>
       <div class="palette" id="palette"></div>
     </div>
@@ -108,7 +119,7 @@ import { loadStore, saveStore } from './src/persist.js';
 import { cursiveLetters, contextWords } from './src/cursive/wordlist.js';
 import {
   addCursiveSample, addExtras, cursiveSampleCount, extrasOf,
-  coverage, initCursive, mergeCursive,
+  coverage, initCursive, mergeCursive, variantCoverage,
 } from './src/cursive/store.js';
 import { extractExtras } from './src/cursive/extract.js';
 
@@ -119,6 +130,7 @@ initCursive(store);
 
 const cap = createCapture($('#cap'), { sideBearing: store.metrics.sideBearing });
 let currentChar = LETTERS[0];
+let currentVariant = 0;
 $('#charInput').value = currentChar;
 
 function setStatus(text, warn) {
@@ -127,9 +139,32 @@ function setStatus(text, warn) {
   el.className = 'msg' + (warn ? ' warn' : '');
 }
 
-// Draw a sample grey with its extracted extras coloured by kind. Both live in
-// the same cap-unit frame, so no re-anchoring is needed here.
-function showPreview(sample, extras) {
+const ghostAlpha = () => (Number($('#ghostA').value) || 0) / 100;
+
+// Put the selected base variant behind the ink as a faint ghost to trace.
+function applyGhost() {
+  const variants = store.glyphs[currentChar] || [];
+  cap.setGhost(variants[currentVariant] || null, ghostAlpha());
+}
+
+// Letter by letter, then variant by variant: the prompt names the exact
+// variant whose ghost is on the canvas, so every cursive sample is tied to
+// one known base (sample.baseIndex).
+function refreshPrompt() {
+  const variants = store.glyphs[currentChar] || [];
+  const words = contextWords(currentChar).map((w) => `'${w}'`).join(', ');
+  if (!variants.length) {
+    $('#prompt').textContent = `No print glyph for '${currentChar}' — capture it in index.html first.`;
+  } else {
+    $('#prompt').textContent =
+      `Cursive '${currentChar}' — variant ${currentVariant + 1} of ${variants.length}, as in ${words}. ` +
+      `Trace the grey body, then add the entry flick on the left and the exit flick on the right.`;
+  }
+}
+
+// Draw the traced-over base (blue-grey), the sample (grey) and its extracted
+// extras coloured by kind. All live in the same cap-unit frame.
+function showPreview(base, sample, extras) {
   const ctx = $('#preview').getContext('2d');
   const w = $('#preview').width;
   const h = $('#preview').height;
@@ -163,70 +198,131 @@ function showPreview(sample, extras) {
     }
     ctx.stroke();
   };
+  if (base) for (const stroke of base.strokes) draw(stroke, '#b9cfe8');
   for (const stroke of sample.strokes) draw(stroke, '#c8cdd8');
   const colors = { prefix: '#9fe6c6', suffix: '#7fb0e0', misc: '#f5a3a3' };
   for (const e of extras) {
     draw(e.rel.map((p) => ({ x: p.x + e.attach.x, y: p.y + e.attach.y })), colors[e.kind]);
   }
-  $('#previewHelp').innerHTML = `Preview of the last saved sample. <span class="g">green</span>/<span class="s">blue</span>/<span class="m">red</span> = prefix/suffix/misc.`;
+  $('#previewHelp').innerHTML = `Preview of the last saved sample (blue-grey = the base variant it is tied to). <span class="g">green</span>/<span class="s">blue</span>/<span class="m">red</span> = prefix/suffix/misc.`;
 }
 
 function refresh() {
   let total = 0;
+  let doneAll = 0;
+  const covs = coverage(store, LETTERS);
   for (const c of LETTERS) total += cursiveSampleCount(store, c);
+  for (const cov of covs) {
+    if (cov.variants && cov.variantsDone === cov.variants) doneAll++;
+  }
   $('#storeStats').innerHTML =
-    `Letters with samples: <b>${LETTERS.filter((c) => cursiveSampleCount(store, c) > 0).length}</b> / ${LETTERS.length} &nbsp; Samples: <b>${total}</b>`;
+    `Letters complete: <b>${doneAll}</b> / ${LETTERS.length} &nbsp; Samples: <b>${total}</b>`;
   const e = extrasOf(store, currentChar);
+  const vc = variantCoverage(store, currentChar);
   $('#charStats').innerHTML =
     `"${currentChar}": <b>${cursiveSampleCount(store, currentChar)}</b> sample(s) · ` +
-    `<span class="g">${e.prefix.length} prefix</span> · <span class="s">${e.suffix.length} suffix</span> · <span class="m">${e.misc.length} misc</span>`;
+    `<span class="g">${e.prefix.length} prefix</span> · <span class="s">${e.suffix.length} suffix</span> · <span class="m">${e.misc.length} misc</span>` +
+    (vc.length ? ` · <b>${vc.filter((v) => v.done).length}/${vc.length}</b> variants traced` : '');
+
+  // Variant strip: one button per print variant; done = a cursive sample of
+  // this variant produced both a prefix and a suffix.
+  const strip = $('#variants');
+  strip.textContent = '';
+  vc.forEach((v, i) => {
+    const b = document.createElement('button');
+    b.className = 'p v' + (i === currentVariant ? ' sel' : '') + (v.done ? ' done' : v.samples ? ' seen' : '');
+    b.innerHTML = `v${i + 1}<small>${v.done ? '✓' : v.samples ? '±' : '—'}</small>`;
+    b.onclick = () => {
+      currentVariant = i;
+      cap.setChar();
+      applyGhost();
+      refresh();
+    };
+    strip.appendChild(b);
+  });
+  if (!vc.length) {
+    const d = document.createElement('div');
+    d.className = 'help';
+    d.textContent = 'No print variants for this letter yet.';
+    strip.appendChild(d);
+  }
 
   const palette = $('#palette');
   palette.textContent = '';
-  for (const cov of coverage(store, LETTERS)) {
+  for (const cov of covs) {
     const b = document.createElement('button');
-    b.className = 'p' + (cov.ch === currentChar ? ' sel' : '') + (cov.samples > 0 ? ' done' : '');
-    b.innerHTML = `${cov.ch}<small>${cov.samples}·${cov.prefix}/${cov.suffix}/${cov.misc}</small>`;
-    b.onclick = () => { currentChar = cov.ch; $('#charInput').value = cov.ch; cap.setChar(); refresh(); };
+    const full = cov.variants > 0 && cov.variantsDone === cov.variants;
+    const started = cov.variantsDone > 0;
+    b.className = 'p' + (cov.ch === currentChar ? ' sel' : '') + (full ? ' done all' : started ? ' seen' : '');
+    b.innerHTML = `${cov.ch}<small>${cov.variants ? `${cov.variantsDone}/${cov.variants}` : '—'}</small>`;
+    b.onclick = () => setChar(cov.ch);
     palette.appendChild(b);
   }
 
-  $('#prompt').textContent =
-    `Write cursive '${currentChar}' — as in ${contextWords(currentChar).map((w) => `'${w}'`).join(', ')}`;
+  refreshPrompt();
   saveStore(store);
 }
 
+// Select a letter and jump to its first unfinished variant.
+function setChar(ch) {
+  currentChar = ch;
+  $('#charInput').value = ch;
+  const vc = variantCoverage(store, ch);
+  const firstOpen = vc.findIndex((v) => !v.done);
+  currentVariant = firstOpen === -1 ? 0 : firstOpen;
+  cap.setChar();
+  applyGhost();
+  refresh();
+}
+
 $('#save').onclick = () => {
-  const ch = $('#charInput').value.trim();
-  if (ch.length !== 1) { setStatus('Type exactly one letter.', true); return; }
+  const ch = currentChar;
   const variants = store.glyphs[ch];
   if (!variants || !variants.length) {
     setStatus(`No print glyph for "${ch}" in the store — capture it in index.html first (or load the legacy font there).`, true);
     return;
   }
-  const sample = cap.save();
+  if (currentVariant >= variants.length) { setStatus('Variant out of range.', true); return; }
+  const base = variants[currentVariant];
+  const sample = cap.save({ align: 'ghost' });
   if (!sample) { setStatus('Write the cursive form first.', true); return; }
+  // The sample is tied to this exact variant; the ghost frame (kept by
+  // align 'ghost') is that variant's frame, so extraction needs no re-anchor.
+  sample.baseIndex = currentVariant;
   const idx = addCursiveSample(store, ch, sample);
-  const extras = extractExtras(variants, sample).map((e2) => ({ ...e2, from: idx - 1 }));
+  const from = idx - 1;
+  const extras = extractExtras(base, sample).map((e2) => ({ ...e2, base: currentVariant, from }));
   addExtras(store, ch, extras);
   const n = { prefix: 0, suffix: 0, misc: 0 };
   for (const e2 of extras) n[e2.kind]++;
-  showPreview(sample, extras);
+  const problems = [];
+  if (!n.prefix) problems.push(`no entry stroke detected for '${ch}' variant ${currentVariant + 1}`);
+  if (!n.suffix) problems.push(`no exit stroke detected for '${ch}' variant ${currentVariant + 1}`);
+  showPreview(base, sample, extras);
   refresh();
-  setStatus(`Saved sample #${idx} for "${ch}": ${n.prefix} prefix, ${n.suffix} suffix, ${n.misc} misc stroke(s) extracted.`);
+  setStatus(
+    `Saved '${ch}' variant ${currentVariant + 1}: ${n.prefix} prefix, ${n.suffix} suffix, ${n.misc} misc extracted.` +
+    (problems.length ? ' WARNING: ' + problems.join('; ') + ' — write longer flicks that leave the grey body.' : ''),
+    problems.length > 0,
+  );
+  // Advance to the next unfinished variant of this letter (if any).
+  const next = variantCoverage(store, ch).findIndex((v) => !v.done);
+  if (next !== -1 && next !== currentVariant) {
+    currentVariant = next;
+    cap.setChar();
+    applyGhost();
+    refresh();
+  }
 };
 
 $('#undo').onclick = () => cap.undo();
 $('#clear').onclick = () => cap.clear();
 
+$('#ghostA').addEventListener('input', applyGhost);
+
 $('#charInput').oninput = (e) => {
   const v = e.target.value;
-  if (v) {
-    currentChar = v[0].toLowerCase();
-    $('#charInput').value = currentChar;
-    cap.setChar();
-    refresh();
-  }
+  if (v) setChar(v[0].toLowerCase());
 };
 
 $('#importBtn').onclick = () => $('#importInput').click();
@@ -247,7 +343,7 @@ $('#importInput').onchange = async (ev) => {
   } catch (e) {
     setStatus('Import failed: ' + e.message, true);
   }
-  refresh();
+  setChar(currentChar);
 };
 
 $('#exportBtn').onclick = () => {
@@ -260,7 +356,7 @@ $('#exportBtn').onclick = () => {
   setStatus('Exported default-profile.json — this file becomes the app default.');
 };
 
-refresh();
+setChar(currentChar);
 </script>
 </body>
 </html>

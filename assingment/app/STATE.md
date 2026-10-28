@@ -1,9 +1,96 @@
 # STATE.md — resume file
 
-Last updated: Phase 3 (cursive filter) BUILT and node-verified (32-check
-suite). Browser visuals NOT verified (no browser here); Ali owes a visual
-pass of cursive.html and render.html, plus his default cursive profile
-capture. Do not start the speed phase or the image-uploader.
+Last updated: Phase 3.5 (per-variant cursive binding + ink scale) BUILT and
+node-verified (68-check suite). Browser visuals NOT verified (no browser
+here); Ali owes a visual pass of cursive.html, render.html and tests.html,
+plus a RE-CAPTURE of his default cursive profile (the old cursive data is
+dropped on load — see below). Do not start the speed phase or the image-
+uploader.
+
+## Done — Phase 3.5 (2026-10-28, from Ali's two-bug report)
+Ali's report, verified in the profile data (`default-profile (3).json`:
+71 print variants, 179 cursive samples, extras 0 prefix / 164 suffix /
+260 misc) and fixed:
+
+1. Random strokes with cursive on — every cursive sample was compared against
+   the UNION envelope of all print variants and none of it was tied to the
+   variant it was written over; extras were then re-anchored onto whichever
+   variant layout happened to draw. Fix: EVERY cursive sample is now captured
+   against ONE chosen print variant and its extras belong to that variant:
+   - `src/cursive/store.js` — cursive section version bumped to 2
+     (`CURSIVE_VERSION`). Samples carry `baseIndex` (index into
+     `store.glyphs[ch]`), extras carry `base` (same index) + `from` (sample
+     index). `variantCoverage()` counts a variant done only when one of its
+     samples produced BOTH a prefix and a suffix. `mergeCursive()` skips any
+     section not at version 2.
+   - `src/persist.js` — `loadStore()` DROPS a persisted cursive section whose
+     version differs (Ali's localStorage and his `default-profile (3).json`
+     hold stale v1 data; print glyphs are kept, cursive must be re-captured).
+   - `src/capture.js` — `setGhost(sample, alpha)` draws the chosen print
+     variant faintly on the capture canvas to trace over (inside clearInk,
+     after guides; never in strokes/save output). `save({ align: 'ghost' })`
+     keeps the as-drawn x: the sample stays in the base variant's frame, so
+     no re-anchor shifts the body (the old left-edge re-anchor put the whole
+     body right of the variant by the flick's reach — a root cause of the
+     0-prefix flood).
+   - `src/advance.js` — `normalizeToBaseline(strokes, sideBearing, opts)`
+     honours `opts.shiftX === false` (used by the ghost-aligned save).
+   - `src/cursive/extract.js` — REWRITTEN: `extractExtras(base, sample)`
+     measures against ONE base variant. Per sample point: distance to the
+     base ink (CONTACT_TOL 0.06). Per stroke: run before first contact =
+     prefix, run after last contact = suffix, off-body runs between (or a
+     stroke never touching the base) = misc. Same noise floors (runs < 3
+     points AND < 0.08 cap dropped; prefix/suffix reach < 0.04 dropped).
+     Extras store rel/attach in the variant frame; `ref` from that variant's
+     bounds. Simulated ghost-trace over all 354 legacy variants:
+     455 prefix / 477 suffix / 23 misc, 274 variants fully covered.
+   - `cursive.html` — capture now goes letter by letter, then VARIANT by
+     variant: a variant strip (v1..vn, done/±/— marks), the ghost of the
+     selected variant behind the ink, a ghost-opacity slider (default 28%),
+     prompts "Cursive 'a' — variant 2 of 3. Trace the grey body, then add
+     the entry flick on the left and the exit flick on the right." Save
+     stores baseIndex, tags extras, and WARNS when no entry or exit stroke
+     was found; auto-advances to the next unfinished variant. Palette shows
+     per-letter variant completion (done = all variants traced with both
+     flicks).
+   - `src/layout.js` — items carry `sampleIndex` next to `sample`; bridges
+     anchor on `attach`-frame coordinates (same math as draw.js); the
+     arbitrary `joinY` fallback (no-prefix bridge onto x-height*0.6) is
+     GONE — a pair only joins when the left variant has a suffix AND the
+     right variant has a prefix, both of the drawn variants' own base.
+   - `src/cursive/choose.js` — `availableFor(store, ch, base)` filters
+     extras by `extra.base === item.sampleIndex`; never borrows from another
+     variant; extras without a numeric base (stale data) match nothing.
+     `chooseForPair` requires suffix AND prefix. Misc no longer floods:
+     `chooseMiscForItem` has its own per-letter chance (CURSIVE.miscChance
+     0.25, null in separate mode) and only from the same base. `joinYFrac`
+     removed from CURSIVE.
+   - `src/draw.js` — `anchored()` is now `item.x/y + attach + rel` for ALL
+     kinds (the proportional misc remap is gone: the extra was extracted in
+     exactly this variant's frame). Verified: joined pairs are ink-continuous
+     (bridge pinned exactly on suffix tip / prefix entry, or the tip already
+     reaches the entry within bridge.js's 0.02 threshold and no bridge is
+     needed).
+   - Tests: `tests/phase3.test.mjs` rewritten to the new contracts — 68
+     checks, all pass, including per-base choosing (g0->n0 joins,
+     g1->n1/g1->n0/g0->n1 stay separate), stale-extra rejection, misc chance
+     statistics, version gating, per-variant coverage and ink continuity.
+
+2. Thin ink ALSO looks lighter — `draw.js` rasterized 1:1 on the 794x1123
+   canvas, so an ink width below ~1px only partly covers each pixel and
+   antialiasing blends it toward white. Fix: `drawPage(..., { scale: S })`
+   draws on `widthPx*S x heightPx*S`, multiplies capPx and lineWidth by S;
+   the fallback sprite is rendered at `capPx*S` with target `inkWidth*S`
+   (cache key includes S). `render.html` previews at
+   S = max(2, ceil(devicePixelRatio)) (CSS `.page` size unchanged — the
+   browser downscales the larger backing store) and the PDF export
+   re-rasterizes the SAME layout at S=3 (~288 dpi) before `pagesToPdf`.
+   New `tests.html` (browser page) draws stems at widths 0.5/1/2.2/4 and
+   asserts the darkest pixel equals the ink colour within 2 at alpha 255 —
+   NOT VERIFIED here (no browser; Ali runs it).
+   Follow-up listed, deliberately NOT done now: true vector PDF export
+   (strokes through pdf-lib, fallback chars as a small raster layer) — any
+   raster looks lighter when a viewer zooms/shrinks it.
 
 ## Phase 3 locked decisions (Ali's answers, 2026-10-21)
 - Cursive mapping: PER-LETTER BOXES. User writes each letter's cursive form,
@@ -165,15 +252,21 @@ capture. Do not start the speed phase or the image-uploader.
 
 ## In progress
 - Nothing. Waiting on Ali:
-  1. Visual pass of cursive.html and of render.html's cursive output
-     (no browser in this environment — same as the Phase 2.5 recheck).
-  2. Capture the default cursive profile: cursive.html -> write every
-     prompted letter's cursive form (a few samples each) with real entry and
-     exit flicks -> "Export profile" (default-profile.json).
+  1. Visual pass of cursive.html (ghost tracing, variant strip, warnings),
+     render.html (thin ink at high DPI now solid — try 0.8-1.2px widths),
+     and tests.html (all rows must say ok).
+  2. RE-CAPTURE the default cursive profile: the old cursive data has no
+     per-variant binding and is dropped on load (print glyphs survive). Use
+     the new flow: pick the letter, pick the variant, trace the ghost with
+     entry + exit flicks; save warns when a flick is missing; the palette
+     tracks per-variant completion. Export replaces default-profile.json.
 
 ## Next (after Ali's look)
-- Fix anything Ali flags, then make his default-profile.json the app default
-  (small loader or file drop next to the legacy font; decide then).
-- Post-look tuning round: pull max 0.22 / 0.45-reach params; join-in height
-  x-height*0.6 when a letter has no prefix; the 35% pseudo-straight bridge
-  share; misc envelope sensitivity; whether any of those become controls.
+- Make his re-captured default-profile.json the app default (loader already
+  prefers the bundled copy; decide the file-drop flow).
+- Post-look tuning round: pull max 0.22 / 0.45-reach params; misc chance
+  0.25; CONTACT_TOL 0.06 vs Ali's tracing accuracy; the 35% pseudo-straight
+  bridge share; whether any of those become controls.
+- Follow-up (separate, larger): vector PDF export — strokes as pdf-lib
+  vector ops, fallback characters as a small raster layer, so the PDF stays
+  crisp at any zoom (raster pages lighten when a viewer rescales them).
