@@ -44,7 +44,7 @@
     .output-card{min-height:720px}.out-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:12px}.out-head h2{font-size:.95rem}.status{font-size:.72rem;color:var(--dim)}.pages{display:flex;flex-direction:column;align-items:center;gap:18px;max-height:calc(100vh - 170px);overflow:auto;padding:8px}.page-wrap{width:min(794px,100%)}.page{display:block;width:100%;height:auto;background:#fff;box-shadow:0 7px 28px rgba(0,0,0,.3);border-radius:2px}.page-meta{display:flex;justify-content:center;color:var(--dim);font-size:.68rem;margin-top:6px}
     .footer-note{margin-top:12px;color:var(--dim);font-size:.7rem;line-height:1.45}.kbd{font-family:ui-monospace,monospace;background:rgba(255,255,255,.06);padding:2px 5px;border-radius:5px}
     @media(max-width:1100px){.grid-generate{grid-template-columns:1fr}.output-card{min-height:500px}.pages{max-height:none}.grid-capture{grid-template-columns:1fr}.sidebar{position:static}}
-    @media(max-width:640px){#app{padding:0 12px 24px}header{align-items:flex-start;flex-direction:column}.range-row{grid-template-columns:120px 1fr 42px}.checks{grid-template-columns:1fr}.palette{grid-template-columns:repeat(8,1fr)}}
+    @media(max-width:640px){#app{padding:0 12px 24px}header{align-items:flex-start;flex-direction:column}.range-row{grid-template-columns:120px 1fr 42px}.checks{grid-template-columns:1fr}.palette{grid-template-columns:repeat(8,1fr)}.card{padding:14px}.btn{min-height:44px;font-size:.9rem}.actions .btn{flex:1 1 auto;min-width:96px}.slot{width:44px;height:40px}.capture-top{flex-wrap:wrap}.pbtn{min-height:40px;font-size:.8rem}.textarea{min-height:160px}.pages{padding:4px}}
   </style>
 </head>
 <body>
@@ -65,7 +65,7 @@
 
       <main class="card">
         <div class="capture-top"><div class="char-now">Writing: <b id="charDisplay">a</b></div><div class="slots" id="slots"></div></div>
-        <div class="canvas-wrap"><div class="canvas-box"><canvas id="captureCanvas" width="1000" height="340"></canvas></div></div>
+        <div class="canvas-wrap"><div class="canvas-box"><canvas id="captureCanvas" width="1000" height="560"></canvas></div></div>
         <div class="actions" style="justify-content:center;margin-top:13px"><button id="undoBtn" class="btn secondary">Undo</button><button id="clearCanvas" class="btn danger">Clear</button><button id="saveGlyph" class="btn success">Save variation</button></div>
         <div class="hint">Write naturally. Do not try to keep every sample identical. Keep the baseline visible in your head, but let your real pressure and slant happen.</div>
         <div class="previews" id="previews"></div>
@@ -133,7 +133,7 @@ Remember: small details matter.</textarea>
 
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => [...document.querySelectorAll(s)];
-  const CAP_W = 1000, CAP_H = 340;
+  const CAP_W = 1000, CAP_H = 560;
   const PAGE_W = 794, PAGE_H = 1123;
   const PROFILE_KEY = 'handwrite.profile.v3';
 
@@ -571,7 +571,7 @@ Remember: small details matter.</textarea>
   // ---- Capture ------------------------------------------------------------
   const cap = $('#captureCanvas'), ctx = cap.getContext('2d');
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  function clearCapture(){ ctx.clearRect(0,0,CAP_W,CAP_H); ctx.fillStyle='#fbfcfd'; ctx.fillRect(0,0,CAP_W,CAP_H); ctx.strokeStyle='#a9b8c9'; ctx.lineWidth=2; ctx.setLineDash([8,8]); ctx.beginPath(); ctx.moveTo(70,250); ctx.lineTo(930,250); ctx.stroke(); ctx.setLineDash([]); }
+  function clearCapture(){ ctx.clearRect(0,0,CAP_W,CAP_H); ctx.fillStyle='#fbfcfd'; ctx.fillRect(0,0,CAP_W,CAP_H); ctx.strokeStyle='#a9b8c9'; ctx.lineWidth=2; ctx.setLineDash([8,8]); ctx.beginPath(); ctx.moveTo(70,310); ctx.lineTo(930,310); ctx.stroke(); ctx.setLineDash([]); }
   clearCapture();
 
   function pointFromEvent(e){ const r=cap.getBoundingClientRect(); const x=(e.clientX-r.left)*CAP_W/r.width, y=(e.clientY-r.top)*CAP_H/r.height; return {x,y}; }

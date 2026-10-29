@@ -14,15 +14,19 @@
   .pass { color: #34d399; font-weight: 800; }
   .fail { color: #f87171; font-weight: 800; }
   #summary { margin-top: 14px; font-weight: 800; }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  @media(max-width:640px){ body { padding: 14px 10px; } th, td { padding: 6px; font-size: .72rem; } h1 { font-size: 1rem; } }
 </style>
 </head>
 <body>
 <h1>Phase 0 — rng.js unit tests</h1>
 <div class="sub">Pure toolkit only (no DOM dependency, no Math.random). Each row is an acceptance assertion.</div>
+<div class="table-scroll">
 <table>
   <thead><tr><th>Test</th><th>Result</th><th>Measured</th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
+</div>
 <div id="summary">Running…</div>
 
 <script type="module">

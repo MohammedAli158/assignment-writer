@@ -122,6 +122,33 @@ Compare each cursive sample to the base glyph of the same letter, in the same co
 - The decision to join two letters is about the **pair**: a suffix on letter *n* should lead into letter *n+1*. Propose how to bridge the end of one letter's suffix to the start of the next (for example, a short curve joining the two points), and ask Ali before implementing.
 - Words can be fully joined, partly joined, or fully separate, as in his `user` example.
 
+### 6.5 Pair join rules (hard requirement from Ali)
+
+There is exactly **one join mechanism**: when a pair joins, the first letter is
+drawn with its exit stroke (suffix), the second letter with its entry stroke
+(prefix), and the two are **merged into one continuous flow**. The pair table
+only decides *whether* a pair joins; it never changes *how* they join.
+
+Rules, confirmed by Ali:
+
+1. **Joining is pair-based, not per-letter.** A letter does not "always" or
+   "never" join; only specific pairs do.
+2. **Lowercase only.** Capitals never participate in joins.
+3. **Joinable pairs** (reverse of each pair is also joinable, so `gn` implies
+   `ng`): `gn`, `ar`, `re`, `ye`.
+4. **y always joins** with any neighbor, on either side: `y*`, `*y`.
+5. **g, p, q always join** with any neighbor, on either side (`g*`, `*g`,
+   `p*`, `*p`, `q*`, `*q`) — same one-mechanism merge as above.
+6. **b, t, l, d** always join left-to-right with whatever follows (`b*`, `t*`,
+   `l*`, `d*`), again by the same merge.
+7. **`dd` is the exception and does not join.** Two d's in a row are the same
+   shape written twice, with minimal but existing variation (see section 8
+   variant choice). No merge, no continuous flow.
+
+The renderer must consult a pair-rules table when deciding to join. This table
+is data Ali can extend freely; the join mechanism itself must stay the single
+one described above and never be re-implemented per pair.
+
 ## 7. Explicitly out of scope for now
 
 - The speed phase (speed-dependent letter deformation). This is an open design discussion with Ali, so do not implement it. Only make sure timestamp and pressure data are stored so it stays possible.
