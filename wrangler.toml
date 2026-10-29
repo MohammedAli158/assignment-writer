@@ -1,0 +1,6 @@
+# Cloudflare Pages build configuration (read automatically on every push).
+# No build step: the site is a plain static app, so the output directory
+# (relative to this file, which is the repo root) is sent to Pages as-is.
+name = "assignment-writer-test"
+compatibility_date = "2026-10-01"
+pages_build_output_dir = "assingment/app"
